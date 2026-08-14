@@ -19778,7 +19778,7 @@ function renderInternFeed(ca) {
   const tabsHtml = tabs.map(([key,label], idx) => {
     const active = filter === key;
     const marginRight = idx < tabs.length - 1 ? '8px' : '0';
-    return `<button type="button" onclick="feedSetFilter('${key}')" style="display:inline-block;margin-right:${marginRight};padding:8px 16px;border-radius:999px;border:1.5px solid ${active ? '#4834d4' : '#d1c9b8'};background:${active ? '#4834d4' : '#ffffff'};color:${active ? '#ffffff' : '#3a3a3a'};font-size:12.5px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;white-space:nowrap;">${label}</button>`;
+    return `<button type="button" onclick="feedSetFilter('${key}')" style="display:inline-block;margin-right:${marginRight};padding:8px 16px;border-radius:8px;border:1.5px solid ${active ? '#4834d4' : '#d1c9b8'};background:${active ? '#4834d4' : '#ffffff'};color:${active ? '#ffffff' : '#3a3a3a'};font-size:12.5px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;white-space:nowrap;">${label}</button>`;
   }).join('');
 
   ca.innerHTML = `
@@ -19816,6 +19816,11 @@ function renderInternFeed(ca) {
     </div>
   </div>`;
   _fcCheckTruncation();
+  // Guards against the header/tabs appearing mid-scroll (clipped) if a
+  // previous scroll position carried over from before this re-render —
+  // every filter switch / refresh should start back at the top.
+  document.querySelector('.arw-page')?.scrollTo(0, 0);
+  if (ca) ca.scrollTop = 0;
 }
 function feedSetFilter(key) {
   window._feedFilter = key;
