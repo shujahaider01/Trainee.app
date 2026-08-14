@@ -13443,3 +13443,27 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
   display: flex; align-items: center; justify-content: center; color: var(--text2); cursor: pointer;
 }
 .qp-tool-plus { background: var(--surface2); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Intern Feed — LinkedIn-style post cards, reactions bubble.
+   ══════════════════════════════════════════════════════════════════════ */
+.fc-post-text-clamp {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.fc-reaction-overlay { position: fixed; inset: 0; z-index: 465; background: transparent; }
+.fc-reaction-bubble {
+  position: fixed; z-index: 470; display: flex; gap: 6px;
+  background: var(--surface); border-radius: 30px; padding: 6px 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.22);
+  transform: scale(.6); opacity: 0; transition: transform .18s cubic-bezier(.4,0,.2,1), opacity .18s;
+  transform-origin: bottom left;
+}
+.fc-reaction-bubble.open { transform: scale(1); opacity: 1; }
+.fc-reaction-bubble-item {
+  width: 38px; height: 38px; border-radius: 50%; border: none; font-size: 19px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: transform .12s ease; flex-shrink: 0;
+}
+.fc-reaction-bubble-item:active { transform: scale(1.25); }
