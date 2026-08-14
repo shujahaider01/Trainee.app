@@ -19785,14 +19785,14 @@ function renderInternFeed(ca) {
   <div class="arw-page" style="font-family:'Inter',sans-serif;background:#EFE7D8;">
 
     <!-- Header -->
-    <div class="feed-hd" style="background:var(--surface);">
+    <div class="feed-hd" style="background:var(--surface);position:relative;z-index:3;">
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
       ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
-    <div style="width:100%;box-sizing:border-box;overflow-x:auto;white-space:nowrap;padding:12px 16px 6px;">${tabsHtml}</div>
+    <div style="width:100%;box-sizing:border-box;overflow-x:auto;white-space:nowrap;padding:12px 16px 6px;position:relative;z-index:2;background:#EFE7D8;">${tabsHtml}</div>
 
     <!-- Posts -->
-    <div style="padding:10px 0 90px;">
+    <div style="padding:10px 0 90px;position:relative;z-index:1;overflow:hidden;">
       ${posts.length === 0 ? `
         <div style="text-align:center;padding:80px 18px;">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--border)" stroke-width="1.2" style="margin-bottom:12px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -19882,7 +19882,7 @@ function _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
 
   const textHtml = `
     <div style="padding:0 18px;margin-top:10px;">
-      <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;">${sanitize(p.description||'')}</div>
+      <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;word-break:break-word;overflow-wrap:break-word;">${sanitize(p.description||'')}</div>
       <button type="button" onclick="fcExpandText('${textId}',this)" class="fc-more-btn" style="display:none;background:none;border:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;padding:2px 0;">…more</button>
     </div>`;
   const mediaHtml = p.imageBase64 ? `
