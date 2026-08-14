@@ -19792,7 +19792,7 @@ function renderInternFeed(ca) {
     <div style="width:100%;box-sizing:border-box;overflow-x:auto;white-space:nowrap;padding:12px 16px 6px;position:relative;z-index:2;background:#EFE7D8;">${tabsHtml}</div>
 
     <!-- Posts -->
-    <div style="padding:10px 0 90px;position:relative;z-index:1;overflow:hidden;">
+    <div style="padding:10px 0 90px;position:relative;z-index:1;">
       ${posts.length === 0 ? `
         <div style="text-align:center;padding:80px 18px;">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--border)" stroke-width="1.2" style="margin-bottom:12px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
