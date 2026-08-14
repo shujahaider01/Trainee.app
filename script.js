@@ -19208,7 +19208,7 @@ window.qpSubmitPost = async function() {
   if (!text && !window._qpImageBase64) return;
   if (!db.feedPosts) db.feedPosts = [];
   db.feedPosts.push({
-    type: 'post',
+    type: 'quickpost',
     tag: 'Update',
     description: text || '',
     imageBase64: window._qpImageBase64 || null,
@@ -19763,8 +19763,21 @@ const FC_REACTIONS = {
 
 function renderInternFeed(ca) {
   const allPosts = db.feedPosts || [];
-  const posts = allPosts.filter(p => p.status === 'published').slice().reverse()
-    .sort((a,b) => (b.pinned?1:0) - (a.pinned?1:0)); // pinned posts float to the top
+  window._feedFilter = window._feedFilter || 'all';
+  const filter = window._feedFilter;
+  let posts = allPosts.filter(p => p.status === 'published');
+  if (filter === 'quickpost') posts = posts.filter(p => p.type === 'quickpost');
+  else if (filter === 'post') posts = posts.filter(p => p.type === 'post' || !p.type);
+  else if (filter === 'poll') posts = posts.filter(p => p.type === 'poll');
+  posts = posts.slice().reverse().sort((a,b) => (b.pinned?1:0) - (a.pinned?1:0)); // pinned float to the top
+
+  const totalCount = allPosts.filter(p => p.status === 'published').length;
+  const tabs = [
+    ['all', 'All'], ['quickpost', 'Posts'], ['post', 'Announcements'], ['poll', 'Poll'],
+  ];
+  const tabsHtml = tabs.map(([key,label]) => `
+    <button type="button" onclick="feedSetFilter('${key}')" class="feed-filter-tab${filter===key?' feed-filter-active':''}">${label}</button>
+  `).join('');
 
   ca.innerHTML = `
   <div class="arw-page" style="font-family:'Inter',sans-serif;background:#EFE7D8;">
@@ -19772,8 +19785,9 @@ function renderInternFeed(ca) {
     <!-- Header -->
     <div class="feed-hd" style="background:var(--surface);">
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
-      ${posts.length > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${posts.length} post${posts.length>1?'s':''}</span>` : ''}
+      ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
+    <div class="feed-filter-row" style="background:var(--surface);">${tabsHtml}</div>
 
     <!-- Posts -->
     <div style="padding:10px 0 90px;">
@@ -19785,66 +19799,106 @@ function renderInternFeed(ca) {
         </div>` :
         posts.map((p) => {
           const arrIdx = allPosts.indexOf(p);
-          const textId = `fcText-${arrIdx}`;
           const authorId = p.authorId != null ? p.authorId : 99;
-          const authorName = p.authorName || 'Zia Hasnain';
+          // Looks the name up from the current roster every render, rather
+          // than trusting the name that was frozen into the post at
+          // creation time — so renaming someone updates every post they've
+          // ever made, not just new ones.
+          const rosterMatch = INTERNS.find(i => i.id === authorId);
+          const authorName = rosterMatch ? rosterMatch.name : (p.authorName || 'Zia Hasnain');
           const pinBadge = p.pinned ? `<div style="display:flex;align-items:center;gap:4px;padding:0 18px 6px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="#4834d4" stroke="none"><path d="M12 2l1.5 6L20 9l-5 4 1.5 7L12 16l-4.5 4L9 13 4 9l6.5-1z"/></svg><span style="font-size:11px;font-weight:700;color:#4834d4;">PINNED</span></div>` : '';
 
-          const headerHtml = `
-            <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 18px 0;">
-              <span style="width:44px;height:44px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${buildAvatarImg(getAvatarConfig(authorId), 44)}</span>
-              <div style="flex:1;min-width:0;">
-                <div style="font-size:14.5px;font-weight:700;color:var(--text);">${sanitize(authorName)} <span style="font-weight:400;color:var(--text2);">• Admin</span></div>
-                <div style="font-size:12.5px;color:var(--text3);margin-top:1px;">${feedTimeAgo(p.createdAt)}</div>
-              </div>
-            </div>`;
+          if (p.type === 'quickpost') return _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge);
+          return _fcClassicCardHtml(p, arrIdx, authorId, authorName, pinBadge);
+        }).join('')}
+    </div>
+  </div>`;
+  _fcCheckTruncation();
+}
+function feedSetFilter(key) {
+  window._feedFilter = key;
+  renderInternFeed(document.getElementById('contentArea'));
+}
 
-          let textHtml, mediaHtml = '';
-          if (p.type === 'poll') {
-            const myVote = p.votes && p.votes[currentUser.id];
-            const pollClosed = p.pollCloseDate && p.pollCloseDate < _habitToday();
-            const showResults = !!myVote || pollClosed;
-            textHtml = `<div style="padding:0 18px;margin-top:10px;font-size:15px;font-weight:600;color:var(--text);line-height:1.5;">${sanitize(p.pollQuestion||'')}</div>`;
-            mediaHtml = `
-              <div style="padding:0 18px;margin-top:12px;">
-                ${showResults ? _fpResultsHtml(p, myVote) :
-                  (p.pollOptions||[]).map(o => `
-                  <button type="button" onclick="voteFeedPoll(${arrIdx},'${o.id}')" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:12px;border:1.5px solid var(--border);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;">${sanitize(o.label)}</button>
-                  `).join('')}
-                ${pollClosed ? `<div style="font-size:11.5px;color:var(--text3);">Poll closed</div>` : ''}
-              </div>`;
-          } else {
-            textHtml = `
-              <div style="padding:0 18px;margin-top:10px;">
-                <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;">${sanitize(p.description||'')}</div>
-                <button type="button" onclick="fcExpandText('${textId}',this)" class="fc-more-btn" style="display:none;background:none;border:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;padding:2px 0;">…more</button>
-              </div>`;
-            mediaHtml = `
-              ${p.imageBase64 ? `
-              <div style="padding:12px 18px 0;">
-                <img src="${p.imageBase64}" style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;display:block;">
-              </div>` : ''}
-              ${p.btnLabel ? `
-              <div style="padding:14px 18px 0;">
-                <a href="${sanitize(p.btnUrl||'#')}" target="_blank" rel="noopener noreferrer"
-                  style="display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 24px;border-radius:14px;border:2px solid #4834d4;color:#4834d4;font-size:13.5px;font-weight:700;text-decoration:none;letter-spacing:.4px;background:transparent;">
-                  ${sanitize(p.btnLabel).toUpperCase()}
-                </a>
-              </div>` : ''}`;
-          }
+// Original simple card — Announcements and Polls. No reactions, no
+// comments, no Save/Share: these are read-only official content, not
+// social posts.
+function _fcClassicCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
+  let bodyHtml;
+  if (p.type === 'poll') {
+    const myVote = p.votes && p.votes[currentUser.id];
+    const pollClosed = p.pollCloseDate && p.pollCloseDate < _habitToday();
+    const showResults = !!myVote || pollClosed;
+    bodyHtml = `
+      <div style="margin-top:14px;font-size:16px;font-weight:600;color:var(--text);line-height:1.5;font-family:'Inter',sans-serif;">${sanitize(p.pollQuestion||'')}</div>
+      <div style="margin-top:14px;">
+        ${showResults ? _fpResultsHtml(p, myVote) :
+          (p.pollOptions||[]).map(o => `
+          <button type="button" onclick="voteFeedPoll(${arrIdx},'${o.id}')" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:12px;border:1.5px solid var(--border);background:var(--bg);color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;">${sanitize(o.label)}</button>
+          `).join('')}
+      </div>
+      ${pollClosed ? `<div style="font-size:11.5px;color:var(--text3);margin-top:2px;font-family:'Inter',sans-serif;">Poll closed</div>` : ''}`;
+  } else {
+    bodyHtml = `
+      <div style="margin-top:14px;font-size:16px;font-weight:500;color:var(--text);line-height:1.55;font-family:'Inter',sans-serif;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${sanitize(p.description||'')}</div>
+      ${p.btnLabel ? `
+      <div style="margin-top:18px;">
+        <a href="${sanitize(p.btnUrl||'#')}" target="_blank" rel="noopener noreferrer"
+          style="display:inline-flex;align-items:center;justify-content:center;height:48px;padding:0 26px;border-radius:16px;border:2px solid #4834d4;color:#4834d4;font-size:14px;font-weight:700;font-family:'Inter',sans-serif;text-decoration:none;letter-spacing:.5px;background:transparent;-webkit-tap-highlight-color:transparent;">
+          ${sanitize(p.btnLabel).toUpperCase()}
+        </a>
+      </div>` : ''}`;
+  }
+  return `
+        <div style="background:var(--surface);margin:0 0 10px;padding-top:20px;padding-bottom:20px;">
+          ${pinBadge}
+          ${p.imageBase64 ? `
+          <div style="padding:0 16px;">
+            <img src="${p.imageBase64}" style="width:100%;height:200px;object-fit:cover;border-radius:20px;display:block;">
+          </div>` : ''}
+          <div style="padding:0 18px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-top:${p.imageBase64?'14px':'0'};">
+              <span style="display:inline-block;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:600;font-family:'Inter',sans-serif;background:rgba(72,52,212,.1);color:#4834d4;letter-spacing:.3px;">${p.type==='poll' ? 'POLL' : sanitize((p.tag||'').toUpperCase())}</span>
+              <span style="font-size:13px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${feedTimeAgo(p.createdAt)}</span>
+            </div>
+            ${bodyHtml}
+          </div>
+        </div>`;
+}
 
-          const reactions = p.reactions || {};
-          const counts = {};
-          Object.values(reactions).forEach(t => { if (FC_REACTIONS[t]) counts[t] = (counts[t]||0) + 1; });
-          const total = Object.values(counts).reduce((a,b) => a+b, 0);
-          const presentTypes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]).slice(0,3);
-          const bubbleIcons = presentTypes.map((t,idx) => `<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${FC_REACTIONS[t].color};font-size:10px;margin-left:${idx>0?'-6px':'0'};border:1.5px solid var(--surface);position:relative;z-index:${3-idx};">${FC_REACTIONS[t].emoji}</span>`).join('');
-          const commentCount = (p.comments||[]).length;
+// New LinkedIn-style card — Quick Posts only: reactions, comments, Save/Share.
+function _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
+  const textId = `fcText-${arrIdx}`;
+  const headerHtml = `
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 18px 0;">
+      <span style="width:44px;height:44px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${buildAvatarImg(getAvatarConfig(authorId), 44)}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14.5px;font-weight:700;color:var(--text);">${sanitize(authorName)} <span style="font-weight:400;color:var(--text2);">• Admin</span></div>
+        <div style="font-size:12.5px;color:var(--text3);margin-top:1px;">${feedTimeAgo(p.createdAt)}</div>
+      </div>
+    </div>`;
 
-          const myReaction = reactions[currentUser.id];
-          const activeMeta = myReaction ? FC_REACTIONS[myReaction] : null;
+  const textHtml = `
+    <div style="padding:0 18px;margin-top:10px;">
+      <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;">${sanitize(p.description||'')}</div>
+      <button type="button" onclick="fcExpandText('${textId}',this)" class="fc-more-btn" style="display:none;background:none;border:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;padding:2px 0;">…more</button>
+    </div>`;
+  const mediaHtml = p.imageBase64 ? `
+    <div style="padding:12px 18px 0;">
+      <img src="${p.imageBase64}" style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;display:block;">
+    </div>` : '';
 
-          return `
+  const reactions = p.reactions || {};
+  const counts = {};
+  Object.values(reactions).forEach(t => { if (FC_REACTIONS[t]) counts[t] = (counts[t]||0) + 1; });
+  const total = Object.values(counts).reduce((a,b) => a+b, 0);
+  const presentTypes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]).slice(0,3);
+  const bubbleIcons = presentTypes.map((t,idx) => `<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${FC_REACTIONS[t].color};font-size:10px;margin-left:${idx>0?'-6px':'0'};border:1.5px solid var(--surface);position:relative;z-index:${3-idx};">${FC_REACTIONS[t].emoji}</span>`).join('');
+  const commentCount = (p.comments||[]).length;
+  const myReaction = reactions[currentUser.id];
+  const activeMeta = myReaction ? FC_REACTIONS[myReaction] : null;
+
+  return `
         <div style="background:var(--surface);margin:0 0 10px;padding-bottom:4px;">
           ${pinBadge}
           ${headerHtml}
@@ -19885,10 +19939,6 @@ function renderInternFeed(ca) {
             <div id="fcCommentsWrap-${arrIdx}" style="display:${window._fcExpanded.includes(arrIdx)?'block':'none'};">${_fcCommentsSectionHtml(p, arrIdx)}</div>
           </div>
         </div>`;
-        }).join('')}
-    </div>
-  </div>`;
-  _fcCheckTruncation();
 }
 
 // Shows "…more" only on posts that actually overflow the 3-line clamp —
