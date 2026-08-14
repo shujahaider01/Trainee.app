@@ -18818,6 +18818,7 @@ function buildTxpTaskCard(t, userId, opts={}) {
 // them is honest about that rather than pretending they work.
 const _FEED_MODULE_ICONS = {
   post: '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  quickpost: '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
   poll: '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><path d="M9 21V9"/></svg>',
   voting: '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
   question: '<svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
@@ -18827,6 +18828,7 @@ const _FEED_MODULE_ICONS = {
 function openFeedTypeSheet() {
   const modules = [
     ['post', 'Create Announcement', true],
+    ['quickpost', 'Create Post', true],
     ['poll', 'Create Poll', true],
     ['voting', 'Create Voting Session', false],
     ['question', 'Ask Question', false],
@@ -18861,6 +18863,7 @@ function closeFeedTypeSheet() {
 function openFeedCreateModule(key) {
   const ca = document.getElementById('contentArea');
   if (key === 'post') renderAdminFeedCreate(ca);
+  else if (key === 'quickpost') renderAdminQuickPost(ca);
   else if (key === 'poll') renderAdminPollCreate(ca);
 }
 
@@ -19120,6 +19123,137 @@ function closeFeedAnalytics() {
 }
 
 // ── Admin: Create/Edit full page ─────────────────────
+// ── Admin: classic "Create Post" quick composer ──────────────────────────
+function renderAdminQuickPost(ca) {
+  window._qpImageBase64 = null;
+  ca.innerHTML = `
+    <div class="qp-page" id="qpPage">
+      <div class="qp-header">
+        <button class="qp-close-btn" onclick="closeQuickPost()">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <div class="qp-audience">
+          <span class="qp-avatar">${buildAvatarImg(getAvatarConfig(currentUser.id), 34)}</span>
+          <span class="qp-audience-label">Anyone</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div style="flex:1;"></div>
+        <button class="qp-clock-btn" onclick="showToast('🕐','Scheduling coming soon')">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </button>
+        <button id="qpPostBtn" class="qp-post-btn" disabled onclick="qpSubmitPost()">Post</button>
+      </div>
+
+      <textarea id="qpText" class="qp-textarea" placeholder="Share your thoughts …" oninput="qpUpdatePostBtn()"></textarea>
+
+      <div id="qpImgPreviewWrap" class="qp-img-preview-wrap" style="display:none;">
+        <div class="qp-img-preview">
+          <img id="qpImgPreview" src="">
+          <button type="button" onclick="qpClearImage()" class="qp-img-remove">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="qp-toolbar">
+        <button type="button" class="qp-tool-btn" onclick="document.getElementById('qpImgInput').click()" title="Add photo">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
+        <button type="button" class="qp-tool-btn qp-tool-plus" onclick="document.getElementById('qpImgInput').click()" title="Add photo">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <input type="file" id="qpImgInput" accept="image/*" style="display:none;" onchange="qpHandleImage(this)">
+      </div>
+    </div>`;
+  setTimeout(() => document.getElementById('qpText')?.focus(), 60);
+  _qpPinToVisualViewport();
+}
+function qpUpdatePostBtn() {
+  const txt = document.getElementById('qpText')?.value.trim();
+  const btn = document.getElementById('qpPostBtn'); if (!btn) return;
+  const hasContent = !!txt || !!window._qpImageBase64;
+  btn.disabled = !hasContent;
+  btn.classList.toggle('qp-post-active', hasContent);
+}
+window.qpHandleImage = function(input) {
+  const file = input.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      const canvas = document.createElement('canvas');
+      const maxW = 800, maxH = 500;
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      window._qpImageBase64 = canvas.toDataURL('image/jpeg', 0.75);
+      const pv = document.getElementById('qpImgPreview'); if (pv) pv.src = window._qpImageBase64;
+      const wrap = document.getElementById('qpImgPreviewWrap'); if (wrap) wrap.style.display = 'block';
+      qpUpdatePostBtn();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+};
+function qpClearImage() {
+  window._qpImageBase64 = null;
+  const wrap = document.getElementById('qpImgPreviewWrap'); if (wrap) wrap.style.display = 'none';
+  qpUpdatePostBtn();
+}
+window.qpSubmitPost = async function() {
+  const text = document.getElementById('qpText')?.value.trim();
+  if (!text && !window._qpImageBase64) return;
+  if (!db.feedPosts) db.feedPosts = [];
+  db.feedPosts.push({
+    type: 'post',
+    tag: 'Update',
+    description: text || '',
+    imageBase64: window._qpImageBase64 || null,
+    btnLabel: null, btnUrl: null,
+    status: 'published',
+    createdAt: Date.now(), updatedAt: Date.now(),
+    authorId: currentUser.id, authorName: currentUser.name,
+  });
+  try {
+    await fbPut('feedPosts', db.feedPosts);
+    showToast('✓ Posted', 'success');
+    closeQuickPost(true);
+  } catch (e) { showToast('Failed to post', 'error'); }
+};
+function closeQuickPost(alreadyPosted) {
+  _qpUnpinFromVisualViewport();
+  renderAdminFeed(document.getElementById('contentArea'));
+}
+// Same visualViewport-pinning technique used by the rich text editor, so
+// the toolbar stays above the on-screen keyboard instead of hiding under it.
+function _qpPinToVisualViewport() {
+  if (window._qpViewportHandler) {
+    window.visualViewport?.removeEventListener('resize', window._qpViewportHandler);
+    window.visualViewport?.removeEventListener('scroll', window._qpViewportHandler);
+  }
+  if (!window.visualViewport) return;
+  const vv = window.visualViewport;
+  const apply = () => {
+    const page = document.getElementById('qpPage'); if (!page) return;
+    page.style.top = vv.offsetTop + 'px';
+    page.style.height = vv.height + 'px';
+  };
+  apply();
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  window._qpViewportHandler = apply;
+}
+function _qpUnpinFromVisualViewport() {
+  if (window._qpViewportHandler) {
+    window.visualViewport?.removeEventListener('resize', window._qpViewportHandler);
+    window.visualViewport?.removeEventListener('scroll', window._qpViewportHandler);
+    window._qpViewportHandler = null;
+  }
+}
+
 function renderAdminFeedCreate(ca, editIdx) {
   const isEdit = editIdx !== undefined && editIdx !== null;
   const posts = getFeedPosts();

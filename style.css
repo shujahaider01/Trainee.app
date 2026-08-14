@@ -13390,3 +13390,56 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 .adt-top-name { font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .adt-top-points { font-size: 14px; font-weight: 800; color: var(--text); font-family: 'Outfit', sans-serif; }
 .adt-top-points-lbl { font-size: 10px; color: var(--text3); font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Admin Feed — classic "Create Post" quick composer.
+   ══════════════════════════════════════════════════════════════════════ */
+.qp-page {
+  position: fixed; inset: 0; background: var(--surface);
+  z-index: 460; display: flex; flex-direction: column;
+}
+.qp-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.qp-close-btn {
+  background: none; border: none; width: 34px; height: 34px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; color: var(--text); cursor: pointer;
+}
+.qp-audience { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text); }
+.qp-avatar { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; flex-shrink: 0; background: var(--surface2); }
+.qp-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.qp-audience-label { font-size: 15px; font-weight: 700; color: var(--text); }
+.qp-clock-btn {
+  background: var(--surface2); border: none; width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: var(--text2); cursor: pointer; flex-shrink: 0;
+}
+.qp-post-btn {
+  background: var(--surface2); border: none; border-radius: 20px; padding: 9px 20px;
+  font-size: 14px; font-weight: 700; color: var(--text3); cursor: not-allowed; flex-shrink: 0;
+}
+.qp-post-btn.qp-post-active { background: #4834d4; color: #fff; cursor: pointer; }
+.qp-textarea {
+  flex: 1; border: none; outline: none; resize: none; background: transparent;
+  color: var(--text); font-family: 'Inter', sans-serif; font-size: 19px; font-weight: 400;
+  padding: 18px 16px; line-height: 1.5;
+}
+.qp-textarea::placeholder { color: var(--text3); }
+.qp-img-preview-wrap { padding: 0 16px 12px; flex-shrink: 0; }
+.qp-img-preview { position: relative; border-radius: 14px; overflow: hidden; max-height: 260px; }
+.qp-img-preview img { width: 100%; max-height: 260px; object-fit: cover; display: block; }
+.qp-img-remove {
+  position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%;
+  background: rgba(0,0,0,.5); border: none; display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.qp-toolbar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.qp-tool-btn {
+  background: var(--surface2); border: none; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: var(--text2); cursor: pointer;
+}
+.qp-tool-plus { background: var(--surface2); }
