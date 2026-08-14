@@ -19775,9 +19775,16 @@ function renderInternFeed(ca) {
   const tabs = [
     ['all', 'All'], ['quickpost', 'Posts'], ['post', 'Announcements'], ['poll', 'Poll'],
   ];
-  const tabsHtml = tabs.map(([key,label]) => `
-    <button type="button" onclick="feedSetFilter('${key}')" class="feed-filter-tab${filter===key?' feed-filter-active':''}">${label}</button>
-  `).join('');
+  const tabsHtml = tabs.map(([key,label]) => {
+    const active = filter === key;
+    return `<button type="button" onclick="feedSetFilter('${key}')"
+      style="flex:none;white-space:nowrap;padding:8px 16px;border-radius:999px;
+      border:1.5px solid ${active ? '#4834d4' : '#d1c9b8'};
+      background:${active ? '#4834d4' : '#fff'};
+      color:${active ? '#fff' : '#3a3a3a'};
+      font-size:12.5px;font-weight:700;font-family:'Inter',sans-serif;cursor:pointer;
+      -webkit-tap-highlight-color:transparent;">${label}</button>`;
+  }).join('');
 
   ca.innerHTML = `
   <div class="arw-page" style="font-family:'Inter',sans-serif;background:#EFE7D8;">
@@ -19787,7 +19794,7 @@ function renderInternFeed(ca) {
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
       ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
-    <div class="feed-filter-row">${tabsHtml}</div>
+    <div style="display:flex;flex-direction:row;flex-wrap:nowrap;gap:8px;padding:12px 16px 6px;overflow-x:auto;-webkit-overflow-scrolling:touch;">${tabsHtml}</div>
 
     <!-- Posts -->
     <div style="padding:10px 0 90px;">
