@@ -19787,7 +19787,7 @@ function renderInternFeed(ca) {
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
       ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
-    <div class="feed-filter-row" style="background:var(--surface);">${tabsHtml}</div>
+    <div class="feed-filter-row">${tabsHtml}</div>
 
     <!-- Posts -->
     <div style="padding:10px 0 90px;">

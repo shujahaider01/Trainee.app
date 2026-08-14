@@ -13468,15 +13468,20 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 }
 .fc-reaction-bubble-item:active { transform: scale(1.25); }
 
-/* Feed filter tabs — All / Posts / Announcements / Poll */
+/* Feed filter tabs — All / Posts / Announcements / Poll.
+   Deliberately NOT attached to the header — sits in its own row on the
+   cream page background, with a visible gap above and below, same as the
+   gap between post cards. */
 .feed-filter-row {
-  display: flex; gap: 8px; padding: 4px 16px 14px;
+  display: flex; gap: 8px; padding: 12px 16px 4px;
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  background: transparent;
 }
 .feed-filter-row::-webkit-scrollbar { display: none; }
 .feed-filter-tab {
-  flex-shrink: 0; padding: 9px 18px; border-radius: 20px; border: 1.5px solid var(--border);
-  background: var(--surface2); color: var(--text2); font-size: 13px; font-weight: 700;
+  flex: 0 0 auto; white-space: nowrap;
+  padding: 8px 16px; border-radius: 999px; border: 1.5px solid var(--border);
+  background: var(--surface); color: var(--text2); font-size: 12.5px; font-weight: 700;
   font-family: 'Inter', sans-serif; cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .feed-filter-tab.feed-filter-active { background: #4834d4; border-color: #4834d4; color: #fff; }
