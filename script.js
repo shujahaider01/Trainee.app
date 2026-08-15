@@ -11521,21 +11521,14 @@ function renderInternLeaderboard(ca) {
   ];
   const trophyRowHtml = trophies.map(t => {
     const isActive = t.state === 'active';
-    const size = isActive ? 40 : 28;
+    const size = isActive ? 42 : 30;
     const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.55 : 1);
     return `
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px;opacity:${opacity};">
         <svg width="${size}" height="${size}" viewBox="0 0 24 24">
-          <!-- handles -->
-          <path d="M6 5 Q1.5 5 1.5 8.5 Q1.5 12 6 11" fill="none" stroke="${t.color}" stroke-width="2" stroke-linecap="round"/>
-          <path d="M18 5 Q22.5 5 22.5 8.5 Q22.5 12 18 11" fill="none" stroke="${t.color}" stroke-width="2" stroke-linecap="round"/>
-          <!-- cup bowl -->
-          <path d="M6 3 L18 3 L18 8 Q18 15 12 16 Q6 15 6 8 Z" fill="${t.color}"/>
-          <path d="M8 4 L11 4 Q10.6 8 8.8 9.5 Q7.3 7.5 8 4 Z" fill="rgba(255,255,255,.4)"/>
-          <!-- stem + tiered base -->
-          <rect x="11" y="16" width="2" height="3.5" fill="${t.color}"/>
-          <rect x="8.5" y="19.5" width="7" height="2" rx="1" fill="${t.color}"/>
-          <rect x="6.5" y="21.5" width="11" height="2" rx="1" fill="${t.color}"/>
+          <path d="M12 2 L21.5 8.9 L17.9 20.1 L6.1 20.1 L2.5 8.9 Z" fill="${t.color}"/>
+          <path d="M12 2 L21.5 8.9 L17.9 20.1 L12 20.1 Z" fill="rgba(0,0,0,.15)"/>
+          <path d="M12 6.5 L13.2 9.9 L16.8 10.1 L14 12.4 L14.9 15.9 L12 13.8 L9.1 15.9 L10 12.4 L7.2 10.1 L10.8 9.9 Z" fill="#fff"/>
         </svg>
         ${isActive ? `<span style="font-size:10.5px;font-weight:800;color:${t.color};">#${myRank || '-'}</span>` : ''}
       </div>`;
