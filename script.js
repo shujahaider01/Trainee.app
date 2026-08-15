@@ -11478,26 +11478,6 @@ function setLbPeriod(period) {
   renderInternLeaderboard(document.getElementById('contentArea'));
 }
 function renderInternLeaderboard(ca) {
-  // Hide bottom nav for leaderboard
-  const mobNav = document.getElementById('mobBottomNav');
-  if (mobNav) mobNav.style.display = 'none';
-  
-  // Add fixed sidebar toggle button
-  let sidebarBtn = document.getElementById('fixed-sidebar-toggle');
-  if (!sidebarBtn) {
-    sidebarBtn = document.createElement('button');
-    sidebarBtn.id = 'fixed-sidebar-toggle';
-    sidebarBtn.className = 'sidebar-toggle-btn';
-    sidebarBtn.setAttribute('aria-label', 'Open Menu');
-    sidebarBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="9 6 15 12 9 18"/>
-      <polyline points="15 6 21 12 15 18"/>
-    </svg>`;
-    sidebarBtn.onclick = toggleMobileSidebar;
-    document.body.appendChild(sidebarBtn);
-  }
-  sidebarBtn.style.display = 'flex';
-  
   const myId = currentUser.id;
   window._lbPeriod = window._lbPeriod || 'week';
   const period = window._lbPeriod;
@@ -11506,121 +11486,107 @@ function renderInternLeaderboard(ca) {
   const interns = INTERNS.filter(i => i.id !== 99);
   const rows = interns.map(i => {
     const avatarCfg = getAvatarConfig(i.id);
+    const allTimePts = (db.submissions[i.id] || {}).points || 0;
     return {
       intern: i,
       pts: xpById[i.id] || 0,
+      level: _internLevel(allTimePts),
       avatarCfg,
-      bgColor: avatarCfg.bgColor || '#1a2e3a'
     };
   }).sort((a, b) => b.pts - a.pts);
 
   const myRank = rows.findIndex(r => r.intern.id === myId) + 1;
-  const myData = rows.find(r => r.intern.id === myId);
+
+  // Real countdown to the end of the selected period — not decorative.
+  const today = new Date(_habitToday() + 'T00:00:00');
+  let daysLeft;
+  if (period === 'week') {
+    const day = today.getDay();
+    daysLeft = day === 0 ? 0 : 7 - day;
+  } else {
+    const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    daysLeft = lastDay - today.getDate();
+  }
+  const countdownLabel = daysLeft <= 0 ? 'LAST DAY' : `${daysLeft} DAY${daysLeft !== 1 ? 'S' : ''} LEFT`;
+
+  // Decorative league trophy row — TraineeXP has no real league/promotion
+  // mechanic, so this mirrors Duolingo's visual structure without
+  // pretending it's tied to a real progression system.
+  const trophies = [
+    { key: 'bronze',  color: '#cd7f32', state: 'past' },
+    { key: 'silver',  color: '#adb5bd', state: 'past' },
+    { key: 'sapphire',color: '#3b82f6', state: 'active' },
+    { key: 'emerald', color: '#22c55e', state: 'locked' },
+    { key: 'ruby',    color: '#ef4444', state: 'locked' },
+  ];
+  const trophyRowHtml = trophies.map(t => {
+    const isActive = t.state === 'active';
+    const size = isActive ? 46 : 32;
+    const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.5 : 1);
+    return `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;opacity:${opacity};">
+        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${isActive ? t.color : 'none'}" stroke="${t.color}" stroke-width="1.5"><path d="M8 21h8M12 17v4M17 5V3H7v2M17 5a5 5 0 0 1-5 5 5 5 0 0 1-5-5M17 5h2a2 2 0 0 1-2 2M7 5H5a2 2 0 0 0 2 2"/></svg>
+        ${isActive ? `<span style="font-size:11px;font-weight:800;color:${t.color};">#${myRank || '-'}</span>` : ''}
+      </div>`;
+  }).join('');
 
   ca.innerHTML = `
-    <div class="leaderboard-modern">
-      <!-- Period dropdown + trophy row -->
-      <div class="lb-period-header">
-        <button type="button" class="lb-period-dropdown" onclick="toggleLbPeriodMenu(event)">
-          <span>${period === 'week' ? 'This Week' : 'This Month'}</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    <div class="lb2-page">
+      <div class="lb2-header">
+        <button type="button" class="lb2-hamburger" onclick="toggleMobileSidebar()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <div id="lbPeriodMenu" class="lb-period-menu" style="display:none;">
-          <button type="button" onclick="setLbPeriod('week')">This Week</button>
-          <button type="button" onclick="setLbPeriod('month')">This Month</button>
+        <div class="lb2-header-titles">
+          <button type="button" class="lb2-period-btn" onclick="toggleLbPeriodMenu(event)">
+            <span>${period === 'week' ? 'This Week' : 'This Month'}</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div id="lbPeriodMenu" class="lb-period-menu" style="display:none;">
+            <button type="button" onclick="setLbPeriod('week')">This Week</button>
+            <button type="button" onclick="setLbPeriod('month')">This Month</button>
+          </div>
+          <div class="lb2-countdown">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            ${countdownLabel}
+          </div>
         </div>
       </div>
-      <div class="lb-trophy-row">
-        ${[1,2,3,4,5].map(n => {
-          const isMine = n === 3; // center slot always represents "your current standing"
+
+      <div class="lb2-trophy-row">${trophyRowHtml}</div>
+
+      <div class="lb2-list">
+        ${rows.map((r, idx) => {
+          const rank = idx + 1;
+          const isMe = r.intern.id === myId;
+          const avatarUrl = buildAvatarUrl(r.avatarCfg);
+          const rankBadge = rank === 1
+            ? `<div class="lb2-rank-medal" style="background:#ffd700;">1</div>`
+            : rank === 2
+            ? `<div class="lb2-rank-medal" style="background:#c0c0c0;">2</div>`
+            : rank === 3
+            ? `<div class="lb2-rank-medal" style="background:#cd7f32;">3</div>`
+            : `<div class="lb2-rank-number">${rank}</div>`;
           return `
-          <div class="lb-trophy-slot ${isMine ? 'lb-trophy-active' : ''}">
-            <svg width="${isMine?'40':'30'}" height="${isMine?'40':'30'}" viewBox="0 0 24 24" fill="${isMine ? '#4834d4' : 'none'}" stroke="${isMine ? '#4834d4' : 'var(--border)'}" stroke-width="1.5"><path d="M8 21h8M12 17v4M17 5V3H7v2M17 5a5 5 0 0 1-5 5 5 5 0 0 1-5-5M17 5h2a2 2 0 0 1-2 2 M7 5H5a2 2 0 0 0 2 2"/></svg>
-            ${isMine ? `<span class="lb-trophy-rank">#${myRank || '-'}</span>` : ''}
+          <div class="lb2-row ${isMe ? 'lb2-row-me' : ''}" onclick="${isMe ? '' : `viewPublicProfile(${r.intern.id})`}">
+            ${rankBadge}
+            <div class="lb2-avatar-wrap">
+              <div class="lb2-avatar"><img src="${avatarUrl}" alt="${sanitize(r.intern.name)}"></div>
+              <span class="lb2-online-dot"></span>
+            </div>
+            <div class="lb2-user-info">
+              <div class="lb2-name">${sanitize(r.intern.name)}${isMe ? ' <span class="lb2-you-tag">YOU</span>' : ''}</div>
+              <div class="lb2-meta">@${sanitize(r.intern.username || '')} • Level ${r.level}</div>
+            </div>
+            <div class="lb2-xp">${r.pts.toLocaleString()} XP</div>
           </div>`;
         }).join('')}
       </div>
-
-      <!-- Top 3 Podium -->
-      <div class="podium-section-wrapper">
-        <div class="podium-section">
-          ${rows.slice(0, 3).map((r, idx) => {
-            const rank = idx + 1;
-            const height = rank === 1 ? '140px' : rank === 2 ? '110px' : '90px';
-            const order = rank === 1 ? 2 : rank === 2 ? 1 : 3;
-            const isMe = r.intern.id === myId;
-            const avatarUrl = buildAvatarUrl(r.avatarCfg);
-            const avatarSize = rank === 1 ? '90px' : rank === 2 ? '75px' : '70px';
-            const trophyColor = rank === 1 ? '#FFD700' : rank === 2 ? '#C0C0C0' : '#CD7F32';
-            
-            return `
-              <div class="podium-item" style="order:${order};">
-                <div class="podium-trophy-badge" style="background: ${trophyColor};">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" stroke="none">
-                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
-                  </svg>
-                </div>
-                <div class="podium-avatar-wrap" onclick="${isMe ? '' : `viewPublicProfile(${r.intern.id})`}" style="cursor:${isMe ? 'default' : 'pointer'};">
-                  <div class="podium-avatar" style="background:${r.bgColor}; width:${avatarSize}; height:${avatarSize};">
-                    <img src="${avatarUrl}" alt="${sanitize(r.intern.name)}">
-                  </div>
-                  ${isMe ? '<div class="podium-you-badge">YOU</div>' : ''}
-                </div>
-                <div class="podium-name">${sanitize(r.intern.name.split(' ')[0])}</div>
-                <div class="podium-xp">${r.pts.toLocaleString()} XP</div>
-                <div class="podium-stand" style="height:${height}; background: ${rank === 1 ? 'linear-gradient(180deg, rgba(255,215,0,0.15) 0%, var(--surface) 100%)' : rank === 2 ? 'linear-gradient(180deg, rgba(192,192,192,0.12) 0%, var(--surface) 100%)' : 'linear-gradient(180deg, rgba(205,127,50,0.1) 0%, var(--surface) 100%)'};">
-                  <div class="podium-stand-rank" style="color: ${trophyColor};">${rank}</div>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-
-      <!-- Leaderboard List -->
-      <div class="leaderboard-list">
-        ${rows.slice(3).map((r, idx) => {
-          const rank = idx + 4;
-          const isMe = r.intern.id === myId;
-          const avatarUrl = buildAvatarUrl(r.avatarCfg);
-          
-          return `
-            <div class="leaderboard-row ${isMe ? 'is-me' : ''}" onclick="${isMe ? '' : `viewPublicProfile(${r.intern.id})`}" style="cursor:${isMe ? 'default' : 'pointer'};">
-              <div class="lb-rank">${rank}</div>
-              <div class="lb-avatar" style="background:${r.bgColor};">
-                <img src="${avatarUrl}" alt="${sanitize(r.intern.name)}">
-              </div>
-              <div class="lb-info">
-                <div class="lb-name">${sanitize(r.intern.name)}${isMe ? ' (You)' : ''}</div>
-              </div>
-              <div class="lb-xp">
-                <div class="lb-xp-value">${r.pts.toLocaleString()} XP</div>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-
-      ${myRank > 3 ? `
-        <!-- Fixed My Position Bar (if not in top 3) -->
-        <div class="my-position-bar">
-          <div class="lb-rank">${myRank}</div>
-          <div class="lb-avatar" style="background:${myData.bgColor};">
-            <img src="${buildAvatarUrl(myData.avatarCfg)}" alt="${sanitize(myData.intern.name)}">
-          </div>
-          <div class="lb-info">
-            <div class="lb-name">${sanitize(myData.intern.name)}</div>
-          </div>
-          <div class="lb-xp">
-            <div class="lb-xp-value">${myData.pts.toLocaleString()} XP</div>
-          </div>
-        </div>
-      ` : ''}
     </div>
   `;
-  
+
   if (window.lucide) lucide.createIcons();
 }
+
 
 // ╔══════════════════════════════════════════════════╗
 // ║             INTERN REWARDS PAGE                  ║
