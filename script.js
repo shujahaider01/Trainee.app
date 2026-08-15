@@ -11521,11 +11521,13 @@ function renderInternLeaderboard(ca) {
   ];
   const trophyRowHtml = trophies.map(t => {
     const isActive = t.state === 'active';
-    const size = isActive ? 46 : 32;
-    const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.5 : 1);
+    const size = isActive ? 50 : 34;
+    const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.55 : 1);
     return `
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px;opacity:${opacity};">
-        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${isActive ? t.color : 'none'}" stroke="${t.color}" stroke-width="1.5"><path d="M8 21h8M12 17v4M17 5V3H7v2M17 5a5 5 0 0 1-5 5 5 5 0 0 1-5-5M17 5h2a2 2 0 0 1-2 2M7 5H5a2 2 0 0 0 2 2"/></svg>
+        <svg width="${size}" height="${size}" viewBox="0 0 24 24">
+          <path fill="${t.color}" d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.95V18H7v2h10v-2h-4v-2.06c1.63-.32 2.98-1.45 3.61-2.95C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/>
+        </svg>
         ${isActive ? `<span style="font-size:11px;font-weight:800;color:${t.color};">#${myRank || '-'}</span>` : ''}
       </div>`;
   }).join('');
