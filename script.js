@@ -19762,8 +19762,11 @@ const FC_REACTIONS = {
 };
 
 function renderInternFeed(ca) {
+  // TEMP: filter tabs hidden for now per request. Flip to false (or delete
+  // this line) to bring them back — nothing else needs to change.
+  const HIDE_FEED_TABS = true;
   const allPosts = db.feedPosts || [];
-  window._feedFilter = window._feedFilter || 'all';
+  window._feedFilter = HIDE_FEED_TABS ? 'all' : (window._feedFilter || 'all');
   const filter = window._feedFilter;
   let posts = allPosts.filter(p => p.status === 'published');
   if (filter === 'quickpost') posts = posts.filter(p => p.type === 'quickpost');
@@ -19789,7 +19792,7 @@ function renderInternFeed(ca) {
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
       ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
-    <div style="width:100%;box-sizing:border-box;overflow-x:auto;white-space:nowrap;padding:12px 16px 6px;position:relative;z-index:2;background:#EFE7D8;">${tabsHtml}</div>
+    <div style="width:100%;box-sizing:border-box;overflow-x:auto;white-space:nowrap;padding:12px 16px 6px;position:relative;z-index:2;background:#EFE7D8;${HIDE_FEED_TABS ? 'display:none;' : ''}">${tabsHtml}</div>
 
     <!-- Posts -->
     <div style="padding:10px 0 90px;position:relative;z-index:1;">
