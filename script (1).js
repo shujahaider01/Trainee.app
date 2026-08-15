@@ -18827,11 +18827,8 @@ const _FEED_MODULE_ICONS = {
 };
 function openFeedTypeSheet() {
   const modules = [
-    ['post', 'Create Announcement', true],
     ['quickpost', 'Create Post', true],
-    ['poll', 'Create Poll', true],
     ['voting', 'Create Voting Session', false],
-    ['question', 'Ask Question', false],
     ['form', 'Create Form', false],
     ['event', 'Create Event', false],
   ];
@@ -19124,17 +19121,21 @@ function closeFeedAnalytics() {
 
 // ── Admin: Create/Edit full page ─────────────────────
 // ── Admin: classic "Create Post" quick composer ──────────────────────────
+const QP_TYPE_OPTIONS = ['Post', 'Announcement', 'Poll', 'Question'];
 function renderAdminQuickPost(ca) {
   window._qpImageBase64 = null;
+  window._qpType = 'Post';
+  window._qpCustomTag = '';
+  window._qpPollOptions = ['', ''];
   ca.innerHTML = `
     <div class="qp-page" id="qpPage">
       <div class="qp-header">
         <button class="qp-close-btn" onclick="closeQuickPost()">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
-        <div class="qp-audience">
+        <div class="qp-audience" onclick="qpToggleTypeMenu(event)">
           <span class="qp-avatar">${buildAvatarImg(getAvatarConfig(currentUser.id), 34)}</span>
-          <span class="qp-audience-label">Anyone</span>
+          <span class="qp-audience-label" id="qpTypeLabel">Post</span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div style="flex:1;"></div>
@@ -19144,7 +19145,17 @@ function renderAdminQuickPost(ca) {
         <button id="qpPostBtn" class="qp-post-btn" disabled onclick="qpSubmitPost()">Post</button>
       </div>
 
-      <textarea id="qpText" class="qp-textarea" placeholder="Share your thoughts …" oninput="qpUpdatePostBtn()"></textarea>
+      <div id="qpTypeMenu" class="qp-type-menu" style="display:none;">
+        ${QP_TYPE_OPTIONS.map(t => `<button type="button" class="qp-type-item" onclick="qpSelectType('${t}')">${t}</button>`).join('')}
+        <div class="qp-type-custom-row">
+          <input type="text" id="qpCustomTagInput" placeholder="Custom tag…" oninput="qpCustomTagInput(this.value)" onclick="event.stopPropagation()">
+          <button type="button" onclick="qpSelectType('Custom')">Use</button>
+        </div>
+      </div>
+
+      <div id="qpBodyArea">
+        <textarea id="qpText" class="qp-textarea" placeholder="Share your thoughts …" oninput="qpUpdatePostBtn()"></textarea>
+      </div>
 
       <div id="qpImgPreviewWrap" class="qp-img-preview-wrap" style="display:none;">
         <div class="qp-img-preview">
@@ -19168,10 +19179,73 @@ function renderAdminQuickPost(ca) {
   setTimeout(() => document.getElementById('qpText')?.focus(), 60);
   _qpPinToVisualViewport();
 }
+function qpToggleTypeMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('qpTypeMenu');
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+function qpCustomTagInput(v) { window._qpCustomTag = v; }
+function qpSelectType(type) {
+  if (type === 'Custom') {
+    const v = (window._qpCustomTag || '').trim();
+    if (!v) { showToast('Type a custom tag first', 'error'); return; }
+    window._qpType = v;
+  } else {
+    window._qpType = type;
+  }
+  document.getElementById('qpTypeLabel').textContent = window._qpType;
+  document.getElementById('qpTypeMenu').style.display = 'none';
+  _qpRenderBody();
+  qpUpdatePostBtn();
+}
+// Poll needs its own fields (question + options) instead of the plain
+// textarea — everything else (Post/Announcement/Question/custom tags)
+// shares the exact same simple composer body.
+function _qpRenderBody() {
+  const body = document.getElementById('qpBodyArea'); if (!body) return;
+  if (window._qpType === 'Poll') {
+    body.innerHTML = `
+      <div style="padding:14px 16px 0;">
+        <textarea id="qpPollQuestion" rows="2" placeholder="Ask a poll question …" oninput="qpUpdatePostBtn()"
+          style="width:100%;border:none;outline:none;resize:none;background:transparent;color:var(--text);font-family:'Inter',sans-serif;font-size:18px;font-weight:600;line-height:1.4;padding:0;box-sizing:border-box;"></textarea>
+        <div id="qpPollOptionsList" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
+        <button type="button" onclick="qpAddPollOption()" style="margin-top:4px;background:none;border:1.5px dashed var(--border);border-radius:10px;padding:9px;width:100%;color:var(--text2);font-size:12.5px;font-weight:600;cursor:pointer;">+ Add option</button>
+      </div>`;
+    _qpRenderPollOptions();
+  } else {
+    body.innerHTML = `<textarea id="qpText" class="qp-textarea" placeholder="Share your thoughts …" oninput="qpUpdatePostBtn()"></textarea>`;
+    setTimeout(() => document.getElementById('qpText')?.focus(), 30);
+  }
+}
+function _qpRenderPollOptions() {
+  const box = document.getElementById('qpPollOptionsList'); if (!box) return;
+  box.innerHTML = window._qpPollOptions.map((val, i) => `
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input type="text" value="${sanitize(val)}" placeholder="Option ${i+1}" oninput="window._qpPollOptions[${i}]=this.value;qpUpdatePostBtn()"
+        style="flex:1;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:9px 12px;color:var(--text);font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;">
+      ${window._qpPollOptions.length > 2 ? `<button type="button" onclick="qpRemovePollOption(${i})" style="background:none;border:none;color:#dc2626;cursor:pointer;padding:4px;flex-shrink:0;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>` : ''}
+    </div>`).join('');
+}
+function qpAddPollOption() {
+  if (window._qpPollOptions.length >= 6) { showToast('Maximum 6 options', 'error'); return; }
+  window._qpPollOptions.push('');
+  _qpRenderPollOptions();
+}
+function qpRemovePollOption(i) {
+  window._qpPollOptions.splice(i, 1);
+  _qpRenderPollOptions();
+}
 function qpUpdatePostBtn() {
-  const txt = document.getElementById('qpText')?.value.trim();
   const btn = document.getElementById('qpPostBtn'); if (!btn) return;
-  const hasContent = !!txt || !!window._qpImageBase64;
+  let hasContent;
+  if (window._qpType === 'Poll') {
+    const q = document.getElementById('qpPollQuestion')?.value.trim();
+    const validOpts = window._qpPollOptions.filter(o => (o||'').trim()).length;
+    hasContent = !!q && validOpts >= 2;
+  } else {
+    const txt = document.getElementById('qpText')?.value.trim();
+    hasContent = !!txt || !!window._qpImageBase64;
+  }
   btn.disabled = !hasContent;
   btn.classList.toggle('qp-post-active', hasContent);
 }
@@ -19204,19 +19278,38 @@ function qpClearImage() {
   qpUpdatePostBtn();
 }
 window.qpSubmitPost = async function() {
-  const text = document.getElementById('qpText')?.value.trim();
-  if (!text && !window._qpImageBase64) return;
   if (!db.feedPosts) db.feedPosts = [];
-  db.feedPosts.push({
-    type: 'quickpost',
-    tag: 'Update',
-    description: text || '',
-    imageBase64: window._qpImageBase64 || null,
-    btnLabel: null, btnUrl: null,
-    status: 'published',
-    createdAt: Date.now(), updatedAt: Date.now(),
-    authorId: currentUser.id, authorName: currentUser.name,
-  });
+  const chosenType = window._qpType || 'Post';
+
+  if (chosenType === 'Poll') {
+    const question = document.getElementById('qpPollQuestion')?.value.trim();
+    const labels = window._qpPollOptions.map(o => (o||'').trim()).filter(Boolean);
+    if (!question || labels.length < 2) return;
+    db.feedPosts.push({
+      type: 'poll',
+      tag: 'Poll',
+      pollQuestion: question,
+      pollOptions: labels.map((label, i) => ({ id: 'opt'+i, label })),
+      pollCloseDate: '',
+      votes: {},
+      status: 'published',
+      createdAt: Date.now(), updatedAt: Date.now(),
+      authorId: currentUser.id, authorName: currentUser.name,
+    });
+  } else {
+    const text = document.getElementById('qpText')?.value.trim();
+    if (!text && !window._qpImageBase64) return;
+    db.feedPosts.push({
+      type: 'quickpost',
+      tag: chosenType,
+      description: text || '',
+      imageBase64: window._qpImageBase64 || null,
+      btnLabel: null, btnUrl: null,
+      status: 'published',
+      createdAt: Date.now(), updatedAt: Date.now(),
+      authorId: currentUser.id, authorName: currentUser.name,
+    });
+  }
   try {
     await fbPut('feedPosts', db.feedPosts);
     showToast('✓ Posted', 'success');
@@ -19813,8 +19906,7 @@ function renderInternFeed(ca) {
           const authorName = rosterMatch ? rosterMatch.name : (p.authorName || 'Zia Hasnain');
           const pinBadge = p.pinned ? `<div style="display:flex;align-items:center;gap:4px;padding:0 18px 6px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="#4834d4" stroke="none"><path d="M12 2l1.5 6L20 9l-5 4 1.5 7L12 16l-4.5 4L9 13 4 9l6.5-1z"/></svg><span style="font-size:11px;font-weight:700;color:#4834d4;">PINNED</span></div>` : '';
 
-          if (p.type === 'quickpost') return _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge);
-          return _fcClassicCardHtml(p, arrIdx, authorId, authorName, pinBadge);
+          return _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge);
         }).join('')}
     </div>
   </div>`;
@@ -19830,83 +19922,118 @@ function feedSetFilter(key) {
   renderInternFeed(document.getElementById('contentArea'));
 }
 
-// Original simple card — Announcements and Polls. No reactions, no
-// comments, no Save/Share: these are read-only official content, not
-// social posts.
-function _fcClassicCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
-  let bodyHtml;
-  if (p.type === 'poll') {
-    const myVote = p.votes && p.votes[currentUser.id];
-    const pollClosed = p.pollCloseDate && p.pollCloseDate < _habitToday();
-    const showResults = !!myVote || pollClosed;
-    bodyHtml = `
-      <div style="margin-top:14px;font-size:16px;font-weight:600;color:var(--text);line-height:1.5;font-family:'Inter',sans-serif;">${sanitize(p.pollQuestion||'')}</div>
-      <div style="margin-top:14px;">
-        ${showResults ? _fpResultsHtml(p, myVote) :
-          (p.pollOptions||[]).map(o => `
-          <button type="button" onclick="voteFeedPoll(${arrIdx},'${o.id}')" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:12px;border:1.5px solid var(--border);background:var(--bg);color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;">${sanitize(o.label)}</button>
-          `).join('')}
-      </div>
-      ${pollClosed ? `<div style="font-size:11.5px;color:var(--text3);margin-top:2px;font-family:'Inter',sans-serif;">Poll closed</div>` : ''}`;
-  } else {
-    bodyHtml = `
-      <div style="margin-top:14px;font-size:16px;font-weight:500;color:var(--text);line-height:1.55;font-family:'Inter',sans-serif;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${sanitize(p.description||'')}</div>
-      ${p.btnLabel ? `
-      <div style="margin-top:18px;">
-        <a href="${sanitize(p.btnUrl||'#')}" target="_blank" rel="noopener noreferrer"
-          style="display:inline-flex;align-items:center;justify-content:center;height:48px;padding:0 26px;border-radius:16px;border:2px solid #4834d4;color:#4834d4;font-size:14px;font-weight:700;font-family:'Inter',sans-serif;text-decoration:none;letter-spacing:.5px;background:transparent;-webkit-tap-highlight-color:transparent;">
-          ${sanitize(p.btnLabel).toUpperCase()}
-        </a>
-      </div>` : ''}`;
-  }
-  return `
-        <div style="background:var(--surface);margin:0 0 10px;padding-top:20px;padding-bottom:20px;">
-          ${pinBadge}
-          ${p.imageBase64 ? `
-          <div style="padding:0 16px;">
-            <img src="${p.imageBase64}" style="width:100%;height:200px;object-fit:cover;border-radius:20px;display:block;">
-          </div>` : ''}
-          <div style="padding:0 18px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-top:${p.imageBase64?'14px':'0'};">
-              <span style="display:inline-block;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:600;font-family:'Inter',sans-serif;background:rgba(72,52,212,.1);color:#4834d4;letter-spacing:.3px;">${p.type==='poll' ? 'POLL' : sanitize((p.tag||'').toUpperCase())}</span>
-              <span style="font-size:13px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${feedTimeAgo(p.createdAt)}</span>
-            </div>
-            ${bodyHtml}
-          </div>
-        </div>`;
-}
+// One unified card for every post type — Post/Announcement/Question/custom
+// tags and Poll all share the exact same layout (avatar+name+role header,
+// tag+time row, text-then-image, reaction/comment summary, action row).
+// The only difference: Poll and Announcement-tagged posts don't get the
+// Like/Save/Share treatment — just Comment — since those are official
+// content, not social posts. Everything else (Post/Question/custom tags)
+// gets the full treatment.
+function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
+  const tagLabel = p.type === 'poll' ? 'Poll' : (p.tag || 'Post');
+  const isRestricted = p.type === 'poll' || tagLabel.toLowerCase() === 'announcement';
 
-// New LinkedIn-style card — Quick Posts only: reactions, comments, Save/Share.
-function _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
-  const textId = `fcText-${arrIdx}`;
   const headerHtml = `
     <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 18px 0;">
       <span style="width:44px;height:44px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${buildAvatarImg(getAvatarConfig(authorId), 44)}</span>
       <div style="flex:1;min-width:0;">
         <div style="font-size:14.5px;font-weight:700;color:var(--text);">${sanitize(authorName)} <span style="font-weight:400;color:var(--text2);">• Admin</span></div>
-        <div style="font-size:12.5px;color:var(--text3);margin-top:1px;">${feedTimeAgo(p.createdAt)}</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+          <span style="display:inline-block;padding:2px 8px;border-radius:6px;font-size:10.5px;font-weight:700;background:rgba(72,52,212,.1);color:#4834d4;letter-spacing:.3px;">${sanitize(tagLabel.toUpperCase())}</span>
+          <span style="font-size:12.5px;color:var(--text3);">${feedTimeAgo(p.createdAt)}</span>
+        </div>
       </div>
     </div>`;
 
-  const textHtml = `
-    <div style="padding:0 18px;margin-top:10px;">
-      <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;word-break:break-word;overflow-wrap:break-word;">${sanitize(p.description||'')}</div>
-      <button type="button" onclick="fcExpandText('${textId}',this)" class="fc-more-btn" style="display:none;background:none;border:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;padding:2px 0;">…more</button>
-    </div>`;
-  const mediaHtml = p.imageBase64 ? `
-    <div style="padding:12px 18px 0;">
-      <img src="${p.imageBase64}" style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;display:block;">
-    </div>` : '';
+  let textHtml, mediaHtml = '';
+  if (p.type === 'poll') {
+    const myVote = p.votes && p.votes[currentUser.id];
+    const pollClosed = p.pollCloseDate && p.pollCloseDate < _habitToday();
+    const showResults = !!myVote || pollClosed;
+    textHtml = `<div style="padding:0 18px;margin-top:10px;font-size:15px;font-weight:600;color:var(--text);line-height:1.5;">${sanitize(p.pollQuestion||'')}</div>`;
+    mediaHtml = `
+      <div style="padding:0 18px;margin-top:12px;">
+        ${showResults ? _fpResultsHtml(p, myVote) :
+          (p.pollOptions||[]).map(o => `
+          <button type="button" onclick="voteFeedPoll(${arrIdx},'${o.id}')" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:12px;border:1.5px solid var(--border);background:var(--surface);color:var(--text);font-size:13.5px;font-weight:600;cursor:pointer;">${sanitize(o.label)}</button>
+          `).join('')}
+        ${pollClosed ? `<div style="font-size:11.5px;color:var(--text3);">Poll closed</div>` : ''}
+      </div>`;
+  } else {
+    const textId = `fcText-${arrIdx}`;
+    textHtml = `
+      <div style="padding:0 18px;margin-top:10px;">
+        <div id="${textId}" class="fc-post-text-clamp" style="font-size:14.5px;color:var(--text);line-height:1.5;word-break:break-word;overflow-wrap:break-word;">${sanitize(p.description||'')}</div>
+        <button type="button" onclick="fcExpandText('${textId}',this)" class="fc-more-btn" style="display:none;background:none;border:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;padding:2px 0;">…more</button>
+      </div>`;
+    mediaHtml = `
+      ${p.imageBase64 ? `
+      <div style="padding:12px 18px 0;">
+        <img src="${p.imageBase64}" style="width:100%;max-height:320px;object-fit:cover;border-radius:12px;display:block;">
+      </div>` : ''}
+      ${p.btnLabel ? `
+      <div style="padding:14px 18px 0;">
+        <a href="${sanitize(p.btnUrl||'#')}" target="_blank" rel="noopener noreferrer"
+          style="display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 24px;border-radius:14px;border:2px solid #4834d4;color:#4834d4;font-size:13.5px;font-weight:700;text-decoration:none;letter-spacing:.4px;background:transparent;">
+          ${sanitize(p.btnLabel).toUpperCase()}
+        </a>
+      </div>` : ''}`;
+  }
 
-  const reactions = p.reactions || {};
-  const counts = {};
-  Object.values(reactions).forEach(t => { if (FC_REACTIONS[t]) counts[t] = (counts[t]||0) + 1; });
-  const total = Object.values(counts).reduce((a,b) => a+b, 0);
-  const presentTypes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]).slice(0,3);
-  const bubbleIcons = presentTypes.map((t,idx) => `<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${FC_REACTIONS[t].color};font-size:10px;margin-left:${idx>0?'-6px':'0'};border:1.5px solid var(--surface);position:relative;z-index:${3-idx};">${FC_REACTIONS[t].emoji}</span>`).join('');
   const commentCount = (p.comments||[]).length;
-  const myReaction = reactions[currentUser.id];
-  const activeMeta = myReaction ? FC_REACTIONS[myReaction] : null;
+  let reactionSummaryHtml = '', actionRowHtml = '';
+
+  if (isRestricted) {
+    // Poll / Announcement: Comment only, no reactions, no Save/Share.
+    actionRowHtml = `
+      <div style="display:flex;align-items:center;justify-content:center;padding:10px 8px;">
+        <button type="button" onclick="fcToggleComments(${arrIdx})" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:6px 12px;color:var(--text2);font-size:12.5px;font-weight:700;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          ${commentCount} comment${commentCount!==1?'s':''}
+        </button>
+      </div>`;
+  } else {
+    const reactions = p.reactions || {};
+    const counts = {};
+    Object.values(reactions).forEach(t => { if (FC_REACTIONS[t]) counts[t] = (counts[t]||0) + 1; });
+    const total = Object.values(counts).reduce((a,b) => a+b, 0);
+    const presentTypes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]).slice(0,3);
+    const bubbleIcons = presentTypes.map((t,idx) => `<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${FC_REACTIONS[t].color};font-size:10px;margin-left:${idx>0?'-6px':'0'};border:1.5px solid var(--surface);position:relative;z-index:${3-idx};">${FC_REACTIONS[t].emoji}</span>`).join('');
+    const myReaction = reactions[currentUser.id];
+    const activeMeta = myReaction ? FC_REACTIONS[myReaction] : null;
+
+    reactionSummaryHtml = `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px 8px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${total ? bubbleIcons + `<span style="font-size:12.5px;color:var(--text2);margin-left:4px;">${total}</span>` : `<span style="font-size:12.5px;color:var(--text3);">No reactions yet</span>`}
+        </div>
+        <button type="button" onclick="fcToggleComments(${arrIdx})" style="background:none;border:none;color:var(--text2);font-size:12.5px;cursor:pointer;padding:0;">${commentCount} comment${commentCount!==1?'s':''}</button>
+      </div>
+      <div style="height:1px;background:var(--border);margin:0 18px;"></div>`;
+
+    actionRowHtml = `
+      <div style="display:flex;align-items:center;justify-content:space-around;padding:4px 8px;">
+        <button type="button"
+          onpointerdown="fcLikeLongPressStart(event,${arrIdx})" onpointerup="fcLikeLongPressEnd()" onpointerleave="fcLikeLongPressEnd()" onpointermove="fcLikeLongPressEnd()"
+          onclick="fcLikeClick(${arrIdx})"
+          style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:${activeMeta ? activeMeta.color : 'var(--text2)'};-webkit-tap-highlight-color:transparent;">
+          <span style="font-size:16px;line-height:1;">${activeMeta ? activeMeta.emoji : '👍'}</span>
+          <span style="font-size:11.5px;font-weight:700;">${activeMeta ? activeMeta.label : 'Like'}</span>
+        </button>
+        <button type="button" onclick="fcToggleComments(${arrIdx})" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span style="font-size:11.5px;font-weight:700;">Comment</span>
+        </button>
+        <button type="button" onclick="showToast('🔖','Save — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          <span style="font-size:11.5px;font-weight:700;">Save</span>
+        </button>
+        <button type="button" onclick="showToast('📤','Share — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span style="font-size:11.5px;font-weight:700;">Share</span>
+        </button>
+      </div>`;
+  }
 
   return `
         <div style="background:var(--surface);margin:0 0 10px;padding-bottom:4px;">
@@ -19914,37 +20041,8 @@ function _fcQuickPostCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
           ${headerHtml}
           ${textHtml}
           ${mediaHtml}
-
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px 8px;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              ${total ? bubbleIcons + `<span style="font-size:12.5px;color:var(--text2);margin-left:4px;">${total}</span>` : `<span style="font-size:12.5px;color:var(--text3);">No reactions yet</span>`}
-            </div>
-            <button type="button" onclick="fcToggleComments(${arrIdx})" style="background:none;border:none;color:var(--text2);font-size:12.5px;cursor:pointer;padding:0;">${commentCount} comment${commentCount!==1?'s':''}</button>
-          </div>
-          <div style="height:1px;background:var(--border);margin:0 18px;"></div>
-
-          <div style="display:flex;align-items:center;justify-content:space-around;padding:4px 8px;">
-            <button type="button"
-              onpointerdown="fcLikeLongPressStart(event,${arrIdx})" onpointerup="fcLikeLongPressEnd()" onpointerleave="fcLikeLongPressEnd()" onpointermove="fcLikeLongPressEnd()"
-              onclick="fcLikeClick(${arrIdx})"
-              style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:${activeMeta ? activeMeta.color : 'var(--text2)'};-webkit-tap-highlight-color:transparent;">
-              <span style="font-size:16px;line-height:1;">${activeMeta ? activeMeta.emoji : '👍'}</span>
-              <span style="font-size:11.5px;font-weight:700;">${activeMeta ? activeMeta.label : 'Like'}</span>
-            </button>
-            <button type="button" onclick="fcToggleComments(${arrIdx})" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-              <span style="font-size:11.5px;font-weight:700;">Comment</span>
-            </button>
-            <button type="button" onclick="showToast('🔖','Save — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-              <span style="font-size:11.5px;font-weight:700;">Save</span>
-            </button>
-            <button type="button" onclick="showToast('📤','Share — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              <span style="font-size:11.5px;font-weight:700;">Share</span>
-            </button>
-          </div>
-
+          ${reactionSummaryHtml}
+          ${actionRowHtml}
           <div style="padding:0 18px;">
             <div id="fcCommentsWrap-${arrIdx}" style="display:${window._fcExpanded.includes(arrIdx)?'block':'none'};">${_fcCommentsSectionHtml(p, arrIdx)}</div>
           </div>

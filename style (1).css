@@ -13485,3 +13485,25 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
   font-family: 'Inter', sans-serif; cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .feed-filter-tab.feed-filter-active { background: #4834d4; border-color: #4834d4; color: #fff; }
+
+/* Quick Post composer — type dropdown (Post/Announcement/Poll/Question/Custom) */
+.qp-type-menu {
+  position: absolute; top: 62px; left: 14px; z-index: 10;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15); min-width: 200px; overflow: hidden;
+}
+.qp-type-item {
+  display: block; width: 100%; text-align: left; padding: 11px 16px;
+  background: none; border: none; border-bottom: 1px solid var(--border);
+  font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.qp-type-item:active { background: var(--surface2); }
+.qp-type-custom-row { display: flex; gap: 6px; padding: 10px 12px; }
+.qp-type-custom-row input {
+  flex: 1; border: 1.5px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  font-size: 13px; font-family: inherit; outline: none; background: var(--surface2); color: var(--text);
+}
+.qp-type-custom-row button {
+  background: #4834d4; color: #fff; border: none; border-radius: 8px; padding: 7px 12px;
+  font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
