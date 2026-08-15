@@ -3917,10 +3917,12 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 
 /* Intern dashboard wrapper */
 .intern-dash-wrap {
-  display:flex; flex-direction:column; gap:0; min-height:100vh;
+  display:flex; flex-direction:column; gap:0; background: transparent;
+}
+[data-page="internDashboard"] .content-area {
   background: linear-gradient(160deg, #fbeee9 0%, #f3e6ee 35%, #e9e6f5 65%, #e1e4f5 100%);
 }
-[data-theme="dark"] .intern-dash-wrap { background: var(--bg); }
+[data-theme="dark"][data-page="internDashboard"] .content-area { background: var(--bg); }
 
 /* Points card — same on desktop, enhanced on mobile */
 .intern-pts-card { border-radius:16px; margin-bottom:12px; }
@@ -8218,15 +8220,13 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 [data-page="internProfile"] .content-area,
 [data-page="internSettings"] .content-area,
 [data-page="adminAccountSettings"] .content-area,
-[data-page="adminTrainees"] .content-area,
-[data-page="internDashboard"] .content-area {
+[data-page="adminTrainees"] .content-area {
   padding: 0 !important;
   overflow-y: auto;
 }
 [data-page="internProfile"] .content-area,
 [data-page="adminAccountSettings"] .content-area,
-[data-page="adminTrainees"] .content-area,
-[data-page="internDashboard"] .content-area {
+[data-page="adminTrainees"] .content-area {
   padding-top: 0 !important;
 }
 [data-page="internProfile"] .main-content,
