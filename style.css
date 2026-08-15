@@ -11747,6 +11747,11 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
    ╚══════════════════════════════════════════════════════╝ */
 
 .arw-page{display:flex;flex-direction:column;background:var(--bg);font-family:-apple-system,'SF Pro Display',system-ui,sans-serif;position:fixed;top:0;left:0;right:0;bottom:0;overflow-y:auto;overflow-x:hidden;z-index:50;scrollbar-width:none;-ms-overflow-style:none;}
+.arw-page button, .arw-page a, .arw-page input, .arw-page textarea,
+.fc-modal-sheet button, .fc-modal-sheet input, .fc-modal-sheet textarea,
+.qp-page button, .qp-page input, .qp-page textarea {
+  -webkit-tap-highlight-color: transparent; outline: none;
+}
 .arw-page::-webkit-scrollbar{display:none;width:0;height:0;}
 .arw-header{display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 16px 12px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:30;}
 .arw-back-btn{width:36px;height:36px;border-radius:10px;border:1.5px solid var(--border);background:var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2);-webkit-tap-highlight-color:transparent;flex-shrink:0;}

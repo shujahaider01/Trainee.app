@@ -19877,7 +19877,7 @@ function _fcModalUpdateSubmitBtn() {
   btn.disabled = !has;
   btn.classList.toggle('fc-modal-submit-active', has);
 }
-window.fcModalSubmitComment = async function() {
+window.fcModalSubmitComment = function() {
   const arrIdx = window._fcModalArrIdx;
   const input = document.getElementById('fcModalInput');
   const text = input?.value.trim();
@@ -19891,14 +19891,12 @@ window.fcModalSubmitComment = async function() {
     text: text || '', imageBase64: window._fcModalImageBase64 || null,
     createdAt: Date.now(), likes: [], pinned: false, parentId: null,
   });
-  try {
-    await fbPut('feedPosts', posts);
-    input.value = '';
-    window._fcModalImageBase64 = null;
-    document.getElementById('fcModalImgPreviewWrap').style.display = 'none';
-    _fcModalUpdateSubmitBtn();
-    _fcRenderModalBody();
-  } catch (e) { showToast('Failed to post comment', 'error'); }
+  input.value = '';
+  window._fcModalImageBase64 = null;
+  document.getElementById('fcModalImgPreviewWrap').style.display = 'none';
+  _fcModalUpdateSubmitBtn();
+  _fcRenderModalBody();
+  fbPut('feedPosts', posts).catch(() => showToast('Failed to sync comment', 'error'));
 };
 
 function fcShowReplyBox(commentId) {
@@ -20215,12 +20213,15 @@ function fcExpandText(id, btnEl) {
 // Simple like toggle for the heart box — replaces the earlier multi-
 // reaction long-press picker, which was scrapped in favor of a single
 // heart (matching the simpler reference design).
-window.fcToggleLike = async function(arrIdx) {
+// Optimistic: the local data + re-render happen immediately (instant green
+// fill), and the Firebase write fires in the background afterward — it no
+// longer waits on the network round-trip before showing the change.
+window.fcToggleLike = function(arrIdx) {
   const posts = getFeedPosts();
   const post = posts[arrIdx]; if (!post) return;
   if (!post.likes) post.likes = [];
   const i = post.likes.indexOf(currentUser.id);
   if (i > -1) post.likes.splice(i, 1); else post.likes.push(currentUser.id);
-  try { await fbPut('feedPosts', posts); renderInternFeed(document.getElementById('contentArea')); }
-  catch (e) { showToast('Failed', 'error'); }
+  renderInternFeed(document.getElementById('contentArea'));
+  fbPut('feedPosts', posts).catch(() => showToast('Failed to sync like', 'error'));
 };
