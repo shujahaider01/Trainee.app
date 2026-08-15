@@ -3117,6 +3117,28 @@ function getWeeklyXPRaw(internId) {
 // a genuine month-over-month % delta rather than a made-up figure. Returns
 // every intern sorted highest-XP-first; callers slice the ends off for
 // "Top Performers" / "Bottom Performers".
+// Leaderboard ranking for "This Week" / "This Month" — real XP earned in
+// that window, from each intern's own pointHistory (same data source every
+// other trend/ranking widget in the app already uses).
+function getLeaderboardRanking(period) {
+  const today = new Date(_habitToday() + 'T00:00:00');
+  let start, end;
+  if (period === 'week') {
+    const day = today.getDay(); // 0=Sun..6=Sat
+    const monday = new Date(today); monday.setDate(today.getDate() - ((day + 6) % 7));
+    start = dateToLocalStr(monday);
+    end = dateToLocalStr(today);
+  } else {
+    start = dateToLocalStr(new Date(today.getFullYear(), today.getMonth(), 1));
+    end = dateToLocalStr(today);
+  }
+  return INTERNS.filter(i => i.id !== 99).map(i => {
+    const hist = (db.submissions[i.id] || {}).pointHistory || [];
+    const xp = hist.filter(h => h.date >= start && h.date <= end).reduce((a, h) => a + (h.pts || 0), 0);
+    return { id: i.id, name: i.name, xp };
+  }).sort((a, b) => b.xp - a.xp);
+}
+
 function getPerformersRanking(ref) {
   ref = ref || _npCurRef();
   const prevRef = { year: ref.month === 0 ? ref.year - 1 : ref.year, month: ref.month === 0 ? 11 : ref.month - 1 };
@@ -11446,6 +11468,15 @@ function renderInternSubmissions(ca) { navigateTo('internDocs'); }
 // ╔══════════════════════════════════════════════════╗
 // ║           INTERN LEADERBOARD PAGE                ║
 // ╚══════════════════════════════════════════════════╝
+function toggleLbPeriodMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('lbPeriodMenu');
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+function setLbPeriod(period) {
+  window._lbPeriod = period;
+  renderInternLeaderboard(document.getElementById('contentArea'));
+}
 function renderInternLeaderboard(ca) {
   // Hide bottom nav for leaderboard
   const mobNav = document.getElementById('mobBottomNav');
@@ -11468,13 +11499,16 @@ function renderInternLeaderboard(ca) {
   sidebarBtn.style.display = 'flex';
   
   const myId = currentUser.id;
+  window._lbPeriod = window._lbPeriod || 'week';
+  const period = window._lbPeriod;
+  const ranking = getLeaderboardRanking(period);
+  const xpById = {}; ranking.forEach(r => { xpById[r.id] = r.xp; });
   const interns = INTERNS.filter(i => i.id !== 99);
   const rows = interns.map(i => {
-    const s = db.submissions[i.id] || {};
     const avatarCfg = getAvatarConfig(i.id);
-    return { 
-      intern: i, 
-      pts: s.points || 0, 
+    return {
+      intern: i,
+      pts: xpById[i.id] || 0,
       avatarCfg,
       bgColor: avatarCfg.bgColor || '#1a2e3a'
     };
@@ -11485,6 +11519,28 @@ function renderInternLeaderboard(ca) {
 
   ca.innerHTML = `
     <div class="leaderboard-modern">
+      <!-- Period dropdown + trophy row -->
+      <div class="lb-period-header">
+        <button type="button" class="lb-period-dropdown" onclick="toggleLbPeriodMenu(event)">
+          <span>${period === 'week' ? 'This Week' : 'This Month'}</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="lbPeriodMenu" class="lb-period-menu" style="display:none;">
+          <button type="button" onclick="setLbPeriod('week')">This Week</button>
+          <button type="button" onclick="setLbPeriod('month')">This Month</button>
+        </div>
+      </div>
+      <div class="lb-trophy-row">
+        ${[1,2,3,4,5].map(n => {
+          const isMine = n === 3; // center slot always represents "your current standing"
+          return `
+          <div class="lb-trophy-slot ${isMine ? 'lb-trophy-active' : ''}">
+            <svg width="${isMine?'40':'30'}" height="${isMine?'40':'30'}" viewBox="0 0 24 24" fill="${isMine ? '#4834d4' : 'none'}" stroke="${isMine ? '#4834d4' : 'var(--border)'}" stroke-width="1.5"><path d="M8 21h8M12 17v4M17 5V3H7v2M17 5a5 5 0 0 1-5 5 5 5 0 0 1-5-5M17 5h2a2 2 0 0 1-2 2 M7 5H5a2 2 0 0 0 2 2"/></svg>
+            ${isMine ? `<span class="lb-trophy-rank">#${myRank || '-'}</span>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+
       <!-- Top 3 Podium -->
       <div class="podium-section-wrapper">
         <div class="podium-section">
