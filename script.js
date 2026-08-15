@@ -11521,7 +11521,7 @@ function renderInternLeaderboard(ca) {
   ];
   const trophyRowHtml = trophies.map(t => {
     const isActive = t.state === 'active';
-    const size = isActive ? 62 : 44;
+    const size = isActive ? 72 : 52;
     const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.55 : 1);
     return `
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px;opacity:${opacity};">
@@ -11574,7 +11574,7 @@ function renderInternLeaderboard(ca) {
             ${rankBadge}
             <div class="lb2-avatar-wrap">
               <div class="lb2-avatar"><img src="${avatarUrl}" alt="${sanitize(r.intern.name)}"></div>
-              <span class="lb2-online-dot"></span>
+              ${isMe ? '<span class="lb2-online-dot"></span>' : ''}
             </div>
             <div class="lb2-user-info">
               <div class="lb2-name">${sanitize(r.intern.name)}${isMe ? ' <span class="lb2-you-tag">YOU</span>' : ''}</div>
