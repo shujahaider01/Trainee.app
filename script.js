@@ -19671,6 +19671,18 @@ function fcToggleComments(arrIdx) {
   else if (!open && i === -1) window._fcExpanded.push(arrIdx);
 }
 
+// Highlights @mentions of real roster names in blue — longest names
+// matched first so "Ali" doesn't shadow "Ali Jee".
+function _fcRenderCommentText(text) {
+  let html = sanitize(text || '');
+  const names = INTERNS.map(i => i.name).sort((a,b) => b.length - a.length);
+  names.forEach(name => {
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    html = html.replace(new RegExp('@' + esc + '\\b', 'g'), `<span style="color:#4834d4;font-weight:700;">@${name}</span>`);
+  });
+  return html;
+}
+
 function _fcCommentRow(c, arrIdx, isReply) {
   const liked = (c.likes || []).includes(currentUser.id);
   const isMine = c.userId === currentUser.id;
@@ -19678,7 +19690,7 @@ function _fcCommentRow(c, arrIdx, isReply) {
   const canPin = currentRole === 'admin' && !isReply;
   const avatarImg = buildAvatarImg(getAvatarConfig(c.userId), 28);
   const isEditing = window._fcEditingComment === c.id;
-  return `<div style="display:flex;gap:8px;margin-top:${isReply?'8px':'12px'};margin-left:${isReply?'34px':'0'};">
+  return `<div style="display:flex;gap:8px;margin-top:${isReply?'8px':'12px'};">
     <span style="width:28px;height:28px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${avatarImg}</span>
     <div style="flex:1;min-width:0;">
       <div style="background:var(--surface2);border-radius:12px;padding:8px 12px;">
@@ -19689,7 +19701,8 @@ function _fcCommentRow(c, arrIdx, isReply) {
             <button onclick="fcSaveCommentEdit(${arrIdx},'${c.id}')" style="font-size:11.5px;font-weight:700;color:#4834d4;background:none;border:none;cursor:pointer;padding:0;">Save</button>
             <button onclick="fcCancelCommentEdit(${arrIdx})" style="font-size:11.5px;color:var(--text2);background:none;border:none;cursor:pointer;padding:0;">Cancel</button>
           </div>` :
-          `<div style="font-size:13px;color:var(--text);margin-top:2px;line-height:1.4;font-family:'Inter',sans-serif;">${sanitize(c.text)}</div>`
+          `<div style="font-size:13px;color:var(--text);margin-top:2px;line-height:1.4;font-family:'Inter',sans-serif;">${_fcRenderCommentText(c.text)}</div>
+          ${c.imageBase64 ? `<img src="${c.imageBase64}" style="max-width:100%;max-height:200px;border-radius:10px;margin-top:8px;display:block;object-fit:cover;">` : ''}`
         }
       </div>
       ${!isEditing ? `
@@ -19715,17 +19728,178 @@ function _fcCommentsSectionHtml(post, arrIdx) {
   const all = post.comments || [];
   const topLevel = all.filter(c => !c.parentId).sort((a,b) => (b.pinned?1:0)-(a.pinned?1:0) || a.createdAt-b.createdAt);
   const repliesOf = id => all.filter(c => c.parentId === id).sort((a,b) => a.createdAt-b.createdAt);
-  const rows = topLevel.map(c => _fcCommentRow(c, arrIdx, false) + repliesOf(c.id).map(r => _fcCommentRow(r, arrIdx, true)).join('')).join('');
-  return `
-    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px;">
-      ${rows || `<div style="font-size:12.5px;color:var(--text3);padding:4px 0;font-family:'Inter',sans-serif;">No comments yet — be the first.</div>`}
-      <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
-        <span style="width:28px;height:28px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${buildAvatarImg(getAvatarConfig(currentUser.id), 28)}</span>
-        <input type="text" id="fcNewComment-${arrIdx}" placeholder="Write a comment…" style="flex:1;font-size:13px;border:1px solid var(--border);border-radius:20px;padding:8px 14px;font-family:inherit;outline:none;background:var(--surface2);color:var(--text);box-sizing:border-box;">
-        <button onclick="fcSubmitComment(${arrIdx},null)" style="font-size:12.5px;font-weight:700;color:#4834d4;background:none;border:none;cursor:pointer;flex-shrink:0;">Post</button>
-      </div>
-    </div>`;
+  // Replies sit inside their own left-bordered thread container — the
+  // border creates the vertical connecting line down from the parent.
+  const rows = topLevel.map(c => {
+    const replies = repliesOf(c.id);
+    const repliesHtml = replies.length
+      ? `<div style="margin-left:14px;padding-left:20px;border-left:2px solid var(--border);">${replies.map(r => _fcCommentRow(r, arrIdx, true)).join('')}</div>`
+      : '';
+    return _fcCommentRow(c, arrIdx, false) + repliesHtml;
+  }).join('');
+  return rows || `<div style="font-size:12.5px;color:var(--text3);padding:4px 0;font-family:'Inter',sans-serif;">No comments yet — be the first.</div>`;
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Comments now open in a dedicated dialog (matching the "All activity"
+// style) instead of expanding inline in the card — with an empty state,
+// @mention autocomplete, and photo attachment in the composer.
+// ══════════════════════════════════════════════════════════════════════
+function openFeedCommentsModal(arrIdx) {
+  window._fcModalArrIdx = arrIdx;
+  window._fcModalImageBase64 = null;
+  const html = `
+  <div class="fc-modal-overlay" id="fcModalOverlay" onclick="closeFeedCommentsModal()"></div>
+  <div class="fc-modal-sheet" id="fcModalSheet">
+    <div class="fc-modal-header">
+      <button type="button" onclick="closeFeedCommentsModal()" class="fc-modal-back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="fc-modal-title">Comments</span>
+      <span style="width:36px;"></span>
+    </div>
+    <div class="fc-modal-body" id="fcModalBody"></div>
+    <div class="fc-modal-composer">
+      <div id="fcModalImgPreviewWrap" style="display:none;padding:0 0 8px;">
+        <div style="position:relative;display:inline-block;">
+          <img id="fcModalImgPreview" src="" style="max-height:90px;border-radius:10px;display:block;">
+          <button type="button" onclick="fcModalClearImage()" style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.6);border:none;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;position:relative;">
+        <span class="fc-modal-avatar">${buildAvatarImg(getAvatarConfig(currentUser.id), 32)}</span>
+        <div style="flex:1;position:relative;">
+          <input type="text" id="fcModalInput" placeholder="Add a comment…" oninput="fcCommentInputHandler(this,'fcModalMentionDD')" class="fc-modal-input">
+          <div id="fcModalMentionDD" class="fc-mention-dd" style="display:none;"></div>
+        </div>
+        <button type="button" class="fc-modal-icon-btn" onclick="document.getElementById('fcModalImgInput').click()" title="Add photo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
+        <button type="button" class="fc-modal-icon-btn" onclick="fcModalInsertAt()" title="Mention someone">@</button>
+        <button type="button" id="fcModalSubmitBtn" class="fc-modal-submit-btn" disabled onclick="fcModalSubmitComment()">Comment</button>
+        <input type="file" id="fcModalImgInput" accept="image/*" style="display:none;" onchange="fcModalHandleImage(this)">
+      </div>
+    </div>
+  </div>`;
+  const w = document.createElement('div'); w.id = 'fcModalWrapper'; w.innerHTML = html;
+  document.body.appendChild(w);
+  requestAnimationFrame(() => {
+    document.getElementById('fcModalOverlay')?.classList.add('visible');
+    document.getElementById('fcModalSheet')?.classList.add('open');
+  });
+  _fcRenderModalBody();
+}
+function closeFeedCommentsModal() {
+  const ov = document.getElementById('fcModalOverlay'), m = document.getElementById('fcModalSheet');
+  if (ov) ov.classList.remove('visible');
+  if (m) m.classList.remove('open');
+  setTimeout(() => document.getElementById('fcModalWrapper')?.remove(), 200);
+}
+function _fcRenderModalBody() {
+  const arrIdx = window._fcModalArrIdx;
+  const post = getFeedPosts()[arrIdx];
+  const body = document.getElementById('fcModalBody');
+  if (!body || !post) return;
+  const commentCount = (post.comments || []).length;
+  if (!commentCount) {
+    body.innerHTML = `
+      <div class="fc-modal-empty">
+        <svg width="90" height="90" viewBox="0 0 24 24" fill="none" stroke="var(--border)" stroke-width="1"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <div class="fc-modal-empty-text">Be the first to comment</div>
+        <button type="button" class="fc-modal-empty-btn" onclick="document.getElementById('fcModalInput')?.focus()">Comment</button>
+      </div>`;
+    return;
+  }
+  body.innerHTML = _fcCommentsSectionHtml(post, arrIdx);
+}
+// @mention autocomplete — triggers on "@" + partial name, matches the real roster.
+function fcCommentInputHandler(inputEl, dropdownId) {
+  const match = inputEl.value.match(/@([a-zA-Z ]*)$/);
+  const dd = document.getElementById(dropdownId);
+  if (!dd) return;
+  if (!match) { dd.style.display = 'none'; _fcModalUpdateSubmitBtn(); return; }
+  const q = match[1].trim().toLowerCase();
+  const matches = INTERNS.filter(i => i.name.toLowerCase().includes(q)).slice(0, 5);
+  if (!matches.length) { dd.style.display = 'none'; _fcModalUpdateSubmitBtn(); return; }
+  dd.innerHTML = matches.map(i => `
+    <button type="button" onmousedown="event.preventDefault();fcInsertMention('${inputEl.id}','${dropdownId}',${i.id})" class="fc-mention-item">
+      <span class="fc-mention-avatar">${buildAvatarImg(getAvatarConfig(i.id), 24)}</span>${sanitize(i.name)}
+    </button>`).join('');
+  dd.style.display = 'block';
+  _fcModalUpdateSubmitBtn();
+}
+function fcInsertMention(inputId, dropdownId, internId) {
+  const intern = INTERNS.find(i => i.id === internId); if (!intern) return;
+  const input = document.getElementById(inputId);
+  input.value = input.value.replace(/@([a-zA-Z ]*)$/, '@' + intern.name + ' ');
+  document.getElementById(dropdownId).style.display = 'none';
+  input.focus();
+  _fcModalUpdateSubmitBtn();
+}
+function fcModalInsertAt() {
+  const input = document.getElementById('fcModalInput'); if (!input) return;
+  input.value += (input.value && !input.value.endsWith(' ') ? ' ' : '') + '@';
+  input.focus();
+  fcCommentInputHandler(input, 'fcModalMentionDD');
+}
+function fcModalHandleImage(inputEl) {
+  const file = inputEl.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const maxW = 600, maxH = 400;
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      if (h > maxH) { w = Math.round(w * maxH / h); h = maxH; }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      window._fcModalImageBase64 = canvas.toDataURL('image/jpeg', 0.75);
+      const pv = document.getElementById('fcModalImgPreview'); if (pv) pv.src = window._fcModalImageBase64;
+      const wrap = document.getElementById('fcModalImgPreviewWrap'); if (wrap) wrap.style.display = 'block';
+      _fcModalUpdateSubmitBtn();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  inputEl.value = '';
+}
+function fcModalClearImage() {
+  window._fcModalImageBase64 = null;
+  const wrap = document.getElementById('fcModalImgPreviewWrap'); if (wrap) wrap.style.display = 'none';
+  _fcModalUpdateSubmitBtn();
+}
+function _fcModalUpdateSubmitBtn() {
+  const btn = document.getElementById('fcModalSubmitBtn'); if (!btn) return;
+  const txt = document.getElementById('fcModalInput')?.value.trim();
+  const has = !!txt || !!window._fcModalImageBase64;
+  btn.disabled = !has;
+  btn.classList.toggle('fc-modal-submit-active', has);
+}
+window.fcModalSubmitComment = async function() {
+  const arrIdx = window._fcModalArrIdx;
+  const input = document.getElementById('fcModalInput');
+  const text = input?.value.trim();
+  if (!text && !window._fcModalImageBase64) return;
+  const posts = getFeedPosts();
+  const post = posts[arrIdx]; if (!post) return;
+  if (!post.comments) post.comments = [];
+  post.comments.push({
+    id: 'c' + Date.now() + Math.floor(Math.random()*1000),
+    userId: currentUser.id, userName: currentUser.name,
+    text: text || '', imageBase64: window._fcModalImageBase64 || null,
+    createdAt: Date.now(), likes: [], pinned: false, parentId: null,
+  });
+  try {
+    await fbPut('feedPosts', posts);
+    input.value = '';
+    window._fcModalImageBase64 = null;
+    document.getElementById('fcModalImgPreviewWrap').style.display = 'none';
+    _fcModalUpdateSubmitBtn();
+    _fcRenderModalBody();
+  } catch (e) { showToast('Failed to post comment', 'error'); }
+};
 
 function fcShowReplyBox(commentId) {
   document.querySelectorAll('[id^="fcReplyBox-"]').forEach(el => { if (el.id !== 'fcReplyBox-'+commentId) el.style.display = 'none'; });
@@ -19733,12 +19907,14 @@ function fcShowReplyBox(commentId) {
   if (box) { box.style.display = box.style.display === 'none' ? 'block' : 'none'; document.getElementById('fcReplyInput-'+commentId)?.focus(); }
 }
 
-// Re-renders whichever feed screen is currently active (intern feed, or the
-// admin comment-moderation sheet if open), preserving which posts' comment
-// sections were expanded. Auto-detects context — every comment action below
-// just calls this the same way, no caller-side branching needed.
+// Re-renders whichever comment surface is currently active — the new
+// intern-facing modal, the admin moderation sheet, or (as a fallback) the
+// full feed. Auto-detects context so every comment action below just calls
+// this the same way, no caller-side branching needed.
 function _fcRefreshAfterCommentAction(arrIdx) {
-  if (document.getElementById('faCommentsWrapper')) {
+  if (document.getElementById('fcModalBody')) {
+    _fcRenderModalBody();
+  } else if (document.getElementById('faCommentsWrapper')) {
     openFeedCommentsSheet(arrIdx);
   } else {
     renderInternFeed(document.getElementById('contentArea'));
@@ -19773,7 +19949,7 @@ window.fcCancelCommentEdit = function(arrIdx) {
   _fcRerenderCommentsInPlace(arrIdx);
 };
 function _fcRerenderCommentsInPlace(arrIdx) {
-  const wrap = document.getElementById('fcCommentsWrap-' + arrIdx) || document.getElementById('faCommentsWrapper');
+  const wrap = document.getElementById('fcModalBody') || document.getElementById('faCommentsWrapper');
   const post = getFeedPosts()[arrIdx];
   if (wrap && post) wrap.innerHTML = _fcCommentsSectionHtml(post, arrIdx);
 }
@@ -19823,11 +19999,18 @@ window.fcPinComment = async function(arrIdx, commentId) {
 // (kebab menu → "Comments") without needing to be on the intern feed view.
 function openFeedCommentsSheet(arrIdx) {
   const post = getFeedPosts()[arrIdx]; if (!post) return;
+  const composerHtml = `
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;border-top:1px solid var(--border);padding-top:14px;">
+      <span style="width:28px;height:28px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--surface2);">${buildAvatarImg(getAvatarConfig(currentUser.id), 28)}</span>
+      <input type="text" id="fcNewComment-${arrIdx}" placeholder="Write a comment…" style="flex:1;font-size:13px;border:1px solid var(--border);border-radius:20px;padding:8px 14px;font-family:inherit;outline:none;background:var(--surface2);color:var(--text);box-sizing:border-box;">
+      <button onclick="fcSubmitComment(${arrIdx},null)" style="font-size:12.5px;font-weight:700;color:#4834d4;background:none;border:none;cursor:pointer;flex-shrink:0;">Post</button>
+    </div>`;
   const html = `
   <div class="rte-modal-overlay" id="faCommentsOverlay" onclick="closeFeedCommentsSheet()"></div>
   <div class="rte-color-modal" id="faCommentsModal" style="max-height:75vh;overflow-y:auto;">
     <div class="rte-color-modal-title">Comments</div>
     <div id="faCommentsWrapper">${_fcCommentsSectionHtml(post, arrIdx)}</div>
+    ${composerHtml}
   </div>`;
   const existing = document.getElementById('faCommentsWrapperOuter');
   if (existing) { document.getElementById('faCommentsWrapper').innerHTML = _fcCommentsSectionHtml(post, arrIdx); return; }
@@ -19987,7 +20170,7 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
     // Poll / Announcement: Comment only, no reactions, no Save/Share.
     actionRowHtml = `
       <div style="display:flex;align-items:center;justify-content:center;padding:10px 8px;">
-        <button type="button" onclick="fcToggleComments(${arrIdx})" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:6px 12px;color:var(--text2);font-size:12.5px;font-weight:700;">
+        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:6px 12px;color:var(--text2);font-size:12.5px;font-weight:700;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           ${commentCount} comment${commentCount!==1?'s':''}
         </button>
@@ -20007,7 +20190,7 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
         <div style="display:flex;align-items:center;gap:6px;">
           ${total ? bubbleIcons + `<span style="font-size:12.5px;color:var(--text2);margin-left:4px;">${total}</span>` : `<span style="font-size:12.5px;color:var(--text3);">No reactions yet</span>`}
         </div>
-        <button type="button" onclick="fcToggleComments(${arrIdx})" style="background:none;border:none;color:var(--text2);font-size:12.5px;cursor:pointer;padding:0;">${commentCount} comment${commentCount!==1?'s':''}</button>
+        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="background:none;border:none;color:var(--text2);font-size:12.5px;cursor:pointer;padding:0;">${commentCount} comment${commentCount!==1?'s':''}</button>
       </div>
       <div style="height:1px;background:var(--border);margin:0 18px;"></div>`;
 
@@ -20020,7 +20203,7 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
           <span style="font-size:16px;line-height:1;">${activeMeta ? activeMeta.emoji : '👍'}</span>
           <span style="font-size:11.5px;font-weight:700;">${activeMeta ? activeMeta.label : 'Like'}</span>
         </button>
-        <button type="button" onclick="fcToggleComments(${arrIdx})" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
+        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           <span style="font-size:11.5px;font-weight:700;">Comment</span>
         </button>
@@ -20043,9 +20226,6 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
           ${mediaHtml}
           ${reactionSummaryHtml}
           ${actionRowHtml}
-          <div style="padding:0 18px;">
-            <div id="fcCommentsWrap-${arrIdx}" style="display:${window._fcExpanded.includes(arrIdx)?'block':'none'};">${_fcCommentsSectionHtml(p, arrIdx)}</div>
-          </div>
         </div>`;
 }
 
