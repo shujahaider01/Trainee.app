@@ -20027,10 +20027,11 @@ function closeFeedCommentsSheet() {
 }
 
 // ── Intern: Feed view ────────────────────────────────
-function renderInternFeed(ca) {
+function renderInternFeed(ca, resetScroll) {
   // TEMP: filter tabs hidden for now per request. Flip to false (or delete
   // this line) to bring them back — nothing else needs to change.
   const HIDE_FEED_TABS = true;
+  const prevScrollTop = document.querySelector('.arw-page')?.scrollTop || 0;
   const allPosts = db.feedPosts || [];
   window._feedFilter = HIDE_FEED_TABS ? 'all' : (window._feedFilter || 'all');
   const filter = window._feedFilter;
@@ -20084,15 +20085,20 @@ function renderInternFeed(ca) {
     </div>
   </div>`;
   _fcCheckTruncation();
-  // Guards against the header/tabs appearing mid-scroll (clipped) if a
-  // previous scroll position carried over from before this re-render —
-  // every filter switch / refresh should start back at the top.
-  document.querySelector('.arw-page')?.scrollTo(0, 0);
-  if (ca) ca.scrollTop = 0;
+  // Every-render scroll handling: a filter switch intentionally starts back
+  // at the top (so the header/tabs never appear mid-scroll/clipped), but a
+  // like/comment action re-render should stay right where the person was —
+  // yanking them back to the top mid-scroll felt jarring and un-native.
+  const pageEl = document.querySelector('.arw-page');
+  if (pageEl) {
+    if (resetScroll) pageEl.scrollTo(0, 0);
+    else pageEl.scrollTop = prevScrollTop;
+  }
+  if (ca && resetScroll) ca.scrollTop = 0;
 }
 function feedSetFilter(key) {
   window._feedFilter = key;
-  renderInternFeed(document.getElementById('contentArea'));
+  renderInternFeed(document.getElementById('contentArea'), true);
 }
 
 // One unified card for every post type — Post/Announcement/Question/custom
