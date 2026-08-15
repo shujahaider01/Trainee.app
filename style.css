@@ -8218,13 +8218,15 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 [data-page="internProfile"] .content-area,
 [data-page="internSettings"] .content-area,
 [data-page="adminAccountSettings"] .content-area,
-[data-page="adminTrainees"] .content-area {
+[data-page="adminTrainees"] .content-area,
+[data-page="internDashboard"] .content-area {
   padding: 0 !important;
   overflow-y: auto;
 }
 [data-page="internProfile"] .content-area,
 [data-page="adminAccountSettings"] .content-area,
-[data-page="adminTrainees"] .content-area {
+[data-page="adminTrainees"] .content-area,
+[data-page="internDashboard"] .content-area {
   padding-top: 0 !important;
 }
 [data-page="internProfile"] .main-content,
@@ -10863,8 +10865,9 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 .idash-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: calc(2px + env(safe-area-inset-top)) 18px 8px;
-  background: var(--bg);
+  background: transparent;
 }
+[data-theme="dark"] .idash-header { background: var(--bg); }
 .idash-hamburger, .idash-chat-btn {
   background: none; border: none; padding: 0; margin: 0;
   display: flex; align-items: center; justify-content: center;
