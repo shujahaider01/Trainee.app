@@ -10857,23 +10857,23 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
 /* ── Intern toolkit feature cards ────────────────────── */
 /* ── Intern Dashboard: minimal iOS-style header (Home only) ── */
 .idash-header {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
   padding: calc(2px + env(safe-area-inset-top)) 18px 8px;
   background: var(--bg);
 }
 .idash-hamburger, .idash-chat-btn {
-  background: none; border: none; padding: 0; margin: 0;
+  background: none; border: none; padding: 0; margin: 0; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   color: var(--text); cursor: pointer; -webkit-tap-highlight-color: transparent;
   position: relative;
 }
 .idash-chat-btn .dm-envelope-badge { top: -6px; right: -8px; }
 
-/* ── Intern Dashboard: greeting ── */
-.idash-greeting { padding: 4px 14px 14px; }
-.idash-hello { font-size: 22px; font-weight: 800; color: var(--text); font-family:'Outfit',sans-serif; }
+/* ── Intern Dashboard: greeting (now sits inline next to the hamburger) ── */
+.idash-greeting { padding: 0; min-width: 0; }
+.idash-hello { font-size: 20px; font-weight: 800; color: var(--text); font-family:'Outfit',sans-serif; white-space: nowrap; }
 .idash-wave { display: inline-block; }
-.idash-sub { font-size: 13.5px; color: var(--text2); margin-top: 3px; }
+.idash-sub { font-size: 12.5px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Rocket badge on the points card ── */
 .idash-rocket-badge {

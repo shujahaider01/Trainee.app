@@ -3457,16 +3457,15 @@ function renderInternDashboard(ca) {
       <button class="idash-hamburger" onclick="toggleMobileSidebar()" aria-label="Menu">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
+      <div class="idash-greeting">
+        <div class="idash-hello">Hello, ${sanitize((currentUser.name||'').split(' ')[0])} <span class="idash-wave">👋</span></div>
+        <div class="idash-sub">Let's make today productive.</div>
+      </div>
+      <div style="flex:1;"></div>
       <button class="idash-chat-btn" onclick="navigateTo('dmInbox')" aria-label="Messages">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span class="dm-envelope-badge" id="dmEnvelopeBadgeHome" style="display:none;"></span>
       </button>
-    </div>
-
-    <!-- ── Greeting ── -->
-    <div class="idash-greeting">
-      <div class="idash-hello">Hello, ${sanitize((currentUser.name||'').split(' ')[0])} <span class="idash-wave">👋</span></div>
-      <div class="idash-sub">Let's make today productive.</div>
     </div>
 
     <!-- ── Points card ── -->
