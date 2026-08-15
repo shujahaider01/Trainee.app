@@ -11521,7 +11521,7 @@ function renderInternLeaderboard(ca) {
   ];
   const trophyRowHtml = trophies.map(t => {
     const isActive = t.state === 'active';
-    const size = isActive ? 42 : 30;
+    const size = isActive ? 62 : 44;
     const opacity = t.state === 'locked' ? 0.35 : (t.state === 'past' ? 0.55 : 1);
     return `
       <div style="display:flex;flex-direction:column;align-items:center;gap:4px;opacity:${opacity};">
@@ -11530,7 +11530,6 @@ function renderInternLeaderboard(ca) {
           <path d="M12 2 L21.5 8.9 L17.9 20.1 L12 20.1 Z" fill="rgba(0,0,0,.15)"/>
           <path d="M12 6.5 L13.2 9.9 L16.8 10.1 L14 12.4 L14.9 15.9 L12 13.8 L9.1 15.9 L10 12.4 L7.2 10.1 L10.8 9.9 Z" fill="#fff"/>
         </svg>
-        ${isActive ? `<span style="font-size:10.5px;font-weight:800;color:${t.color};">#${myRank || '-'}</span>` : ''}
       </div>`;
   }).join('');
 

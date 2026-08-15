@@ -13615,8 +13615,8 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0;}
   font-size: 12px; font-weight: 700; color: #6b7280; letter-spacing: .3px;
 }
 .lb2-trophy-row {
-  display: flex; align-items: flex-end; justify-content: center; gap: 16px;
-  padding: 16px 18px 20px; border-bottom: 1px solid #eef0f3;
+  display: flex; align-items: flex-end; justify-content: center; gap: 18px;
+  padding: 18px 16px 22px; border-bottom: 1px solid #eef0f3;
 }
 
 .lb2-list { padding: 4px 0; }
