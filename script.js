@@ -20029,14 +20029,6 @@ function closeFeedCommentsSheet() {
 }
 
 // ── Intern: Feed view ────────────────────────────────
-const FC_REACTIONS = {
-  like:       { label: 'Like',        emoji: '👍', color: '#3b82f6' },
-  celebrate:  { label: 'Celebrate',   emoji: '👏', color: '#22c55e' },
-  support:    { label: 'Support',     emoji: '🤝', color: '#8b5cf6' },
-  love:       { label: 'Love',        emoji: '❤️', color: '#ef4444' },
-  insightful: { label: 'Insightful',  emoji: '💡', color: '#f59e0b' },
-};
-
 function renderInternFeed(ca) {
   // TEMP: filter tabs hidden for now per request. Flip to false (or delete
   // this line) to bring them back — nothing else needs to change.
@@ -20164,56 +20156,33 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
   }
 
   const commentCount = (p.comments||[]).length;
-  let reactionSummaryHtml = '', actionRowHtml = '';
+  const iCommented = (p.comments||[]).some(c => c.userId === currentUser.id);
+  let actionRowHtml;
 
   if (isRestricted) {
-    // Poll / Announcement: Comment only, no reactions, no Save/Share.
+    // Poll / Announcement: Comment box only — no Like box at all.
     actionRowHtml = `
-      <div style="display:flex;align-items:center;justify-content:center;padding:10px 8px;">
-        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;padding:6px 12px;color:var(--text2);font-size:12.5px;font-weight:700;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          ${commentCount} comment${commentCount!==1?'s':''}
+      <div style="display:flex;padding:12px 18px 16px;">
+        <button type="button" onclick="openFeedCommentsModal(${arrIdx})"
+          style="display:flex;align-items:center;gap:8px;padding:9px 18px;border-radius:14px;border:2px solid ${iCommented?'#22c55e':'var(--border)'};background:none;cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${iCommented?'#22c55e':'none'}" stroke="${iCommented?'#22c55e':'var(--text2)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span style="font-size:14px;font-weight:700;color:${iCommented?'#22c55e':'var(--text)'};">${commentCount}</span>
         </button>
       </div>`;
   } else {
-    const reactions = p.reactions || {};
-    const counts = {};
-    Object.values(reactions).forEach(t => { if (FC_REACTIONS[t]) counts[t] = (counts[t]||0) + 1; });
-    const total = Object.values(counts).reduce((a,b) => a+b, 0);
-    const presentTypes = Object.keys(counts).sort((a,b) => counts[b]-counts[a]).slice(0,3);
-    const bubbleIcons = presentTypes.map((t,idx) => `<span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${FC_REACTIONS[t].color};font-size:10px;margin-left:${idx>0?'-6px':'0'};border:1.5px solid var(--surface);position:relative;z-index:${3-idx};">${FC_REACTIONS[t].emoji}</span>`).join('');
-    const myReaction = reactions[currentUser.id];
-    const activeMeta = myReaction ? FC_REACTIONS[myReaction] : null;
-
-    reactionSummaryHtml = `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px 8px;">
-        <div style="display:flex;align-items:center;gap:6px;">
-          ${total ? bubbleIcons + `<span style="font-size:12.5px;color:var(--text2);margin-left:4px;">${total}</span>` : `<span style="font-size:12.5px;color:var(--text3);">No reactions yet</span>`}
-        </div>
-        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="background:none;border:none;color:var(--text2);font-size:12.5px;cursor:pointer;padding:0;">${commentCount} comment${commentCount!==1?'s':''}</button>
-      </div>
-      <div style="height:1px;background:var(--border);margin:0 18px;"></div>`;
-
+    const likes = p.likes || [];
+    const iLiked = likes.includes(currentUser.id);
     actionRowHtml = `
-      <div style="display:flex;align-items:center;justify-content:space-around;padding:4px 8px;">
-        <button type="button"
-          onpointerdown="fcLikeLongPressStart(event,${arrIdx})" onpointerup="fcLikeLongPressEnd()" onpointerleave="fcLikeLongPressEnd()" onpointermove="fcLikeLongPressEnd()"
-          onclick="fcLikeClick(${arrIdx})"
-          style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:${activeMeta ? activeMeta.color : 'var(--text2)'};-webkit-tap-highlight-color:transparent;">
-          <span style="font-size:16px;line-height:1;">${activeMeta ? activeMeta.emoji : '👍'}</span>
-          <span style="font-size:11.5px;font-weight:700;">${activeMeta ? activeMeta.label : 'Like'}</span>
+      <div style="display:flex;gap:10px;padding:12px 18px 16px;">
+        <button type="button" onclick="fcToggleLike(${arrIdx})"
+          style="display:flex;align-items:center;gap:8px;padding:9px 18px;border-radius:14px;border:2px solid ${iLiked?'#22c55e':'var(--border)'};background:none;cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${iLiked?'#22c55e':'none'}" stroke="${iLiked?'#22c55e':'var(--text2)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span style="font-size:14px;font-weight:700;color:${iLiked?'#22c55e':'var(--text)'};">${likes.length}</span>
         </button>
-        <button type="button" onclick="openFeedCommentsModal(${arrIdx})" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span style="font-size:11.5px;font-weight:700;">Comment</span>
-        </button>
-        <button type="button" onclick="showToast('🔖','Save — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-          <span style="font-size:11.5px;font-weight:700;">Save</span>
-        </button>
-        <button type="button" onclick="showToast('📤','Share — coming soon')" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;cursor:pointer;padding:9px 4px;color:var(--text2);">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          <span style="font-size:11.5px;font-weight:700;">Share</span>
+        <button type="button" onclick="openFeedCommentsModal(${arrIdx})"
+          style="display:flex;align-items:center;gap:8px;padding:9px 18px;border-radius:14px;border:2px solid ${iCommented?'#22c55e':'var(--border)'};background:none;cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="${iCommented?'#22c55e':'none'}" stroke="${iCommented?'#22c55e':'var(--text2)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span style="font-size:14px;font-weight:700;color:${iCommented?'#22c55e':'var(--text)'};">${commentCount}</span>
         </button>
       </div>`;
   }
@@ -20224,7 +20193,6 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
           ${headerHtml}
           ${textHtml}
           ${mediaHtml}
-          ${reactionSummaryHtml}
           ${actionRowHtml}
         </div>`;
 }
@@ -20244,40 +20212,15 @@ function fcExpandText(id, btnEl) {
 }
 
 // ── Reactions: quick-tap Like, long-press for the reaction bubble picker ──
-let _fcLikeLPTimer = null, _fcLikeLPFired = false;
-function fcLikeLongPressStart(e, arrIdx) {
-  _fcLikeLPFired = false;
-  const btn = e.currentTarget;
-  clearTimeout(_fcLikeLPTimer);
-  _fcLikeLPTimer = setTimeout(() => { _fcLikeLPFired = true; fcShowReactionBubble(btn, arrIdx); }, 420);
-}
-function fcLikeLongPressEnd() { clearTimeout(_fcLikeLPTimer); }
-window.fcLikeClick = function(arrIdx) {
-  if (_fcLikeLPFired) { _fcLikeLPFired = false; return; } // the long-press bubble already handled this tap
-  fcSetReaction(arrIdx, 'like');
-};
-function fcShowReactionBubble(btnEl, arrIdx) {
-  document.getElementById('fcReactionBubbleWrapper')?.remove();
-  const rect = btnEl.getBoundingClientRect();
-  const items = Object.keys(FC_REACTIONS).map(key => {
-    const r = FC_REACTIONS[key];
-    return `<button type="button" class="fc-reaction-bubble-item" style="background:${r.color};" onclick="fcSetReaction(${arrIdx},'${key}');closeReactionBubble();" title="${r.label}">${r.emoji}</button>`;
-  }).join('');
-  const bubbleLeft = Math.max(8, Math.min(rect.left - 20, window.innerWidth - 260));
-  const html = `
-    <div class="fc-reaction-overlay" id="fcReactionOverlay" onclick="closeReactionBubble()"></div>
-    <div class="fc-reaction-bubble" id="fcReactionBubble" style="left:${bubbleLeft}px;top:${rect.top - 56}px;">${items}</div>`;
-  const w = document.createElement('div'); w.id = 'fcReactionBubbleWrapper'; w.innerHTML = html;
-  document.body.appendChild(w);
-  requestAnimationFrame(() => document.getElementById('fcReactionBubble')?.classList.add('open'));
-}
-function closeReactionBubble() { document.getElementById('fcReactionBubbleWrapper')?.remove(); }
-window.fcSetReaction = async function(arrIdx, type) {
+// Simple like toggle for the heart box — replaces the earlier multi-
+// reaction long-press picker, which was scrapped in favor of a single
+// heart (matching the simpler reference design).
+window.fcToggleLike = async function(arrIdx) {
   const posts = getFeedPosts();
   const post = posts[arrIdx]; if (!post) return;
-  if (!post.reactions) post.reactions = {};
-  if (post.reactions[currentUser.id] === type) delete post.reactions[currentUser.id]; // tapping your active reaction again removes it
-  else post.reactions[currentUser.id] = type;
+  if (!post.likes) post.likes = [];
+  const i = post.likes.indexOf(currentUser.id);
+  if (i > -1) post.likes.splice(i, 1); else post.likes.push(currentUser.id);
   try { await fbPut('feedPosts', posts); renderInternFeed(document.getElementById('contentArea')); }
   catch (e) { showToast('Failed', 'error'); }
 };
