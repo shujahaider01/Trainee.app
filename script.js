@@ -831,6 +831,12 @@ async function sendDmMessage(threadId, rawText) {
     otherUserId: myId, lastMessage: preview, lastMessageAt: now, unreadCount: theirUnread,
   });
 
+  // Notify the recipient — into the admin inbox if they're the admin (id 99),
+  // otherwise into that intern's inbox.
+  const notif = { type:'chat_message', title: currentUser.name, body: preview, otherUserId: myId };
+  if (String(otherId) === '99') pushAdminNotif(notif);
+  else pushInternNotif(otherId, notif);
+
   return { ok:true, messageId };
 }
 
@@ -1461,15 +1467,15 @@ let _undoTimer  = null;        // BUG-10: pending undo for task completion
 function blankDB() {
   const d = {
     contributors: [], tasks: [], submissions: {}, complaints: [],
-    taskCompletions: {}, notifications: {}, adminNotifications: [],
+    taskCompletions: {},
     catPoints: Object.assign({}, DEF_POINTS), pendingRequests: [],
-    announcements: [], backlog: {},
+    backlog: {},
     habits: [], habitCompletions: {}, habitNotes: {},
-    toolkit: { statusBreakdown: true, attendance: true, docsOverview: true },
+    toolkit: { statusBreakdown: true, attendance: true },
     attendanceSettings: { allowTrainees: false, workingDays: [1,2,3,4,5] },
-    docs: [],
     rewardSettings: { xpPerCoin: 10, roundingPolicy: 'floor', setupDone: false },
     rewards: [], redemptions: [],
+    notifications: {}, adminNotifications: [],
     autoAssignCycle: { colorIdx: 0, iconIdx: 0 }
   };
   INTERNS.filter(i => i.id !== 99).forEach(i => {
@@ -1491,33 +1497,35 @@ function patchDB(data) {
     if (!s.dailyCounts)    s.dailyCounts = {};
     if (!s.avatar)         s.avatar = null; // null = use AVATAR_DEFAULTS
   });
-  if (!data.notifications)      data.notifications = {};
-  if (!data.adminNotifications) data.adminNotifications = [];
   if (!data.contributors)       data.contributors = [];
   if (!data.tasks)              data.tasks = [];
   if (!data.complaints)         data.complaints = [];
   if (!data.taskCompletions)    data.taskCompletions = {};
   if (!data.catPoints)          data.catPoints = Object.assign({}, DEF_POINTS);
   if (!data.pendingRequests)    data.pendingRequests = [];
-  if (!data.announcements)      data.announcements = [];
   if (!data.backlog)            data.backlog = {};
   if (!data.habits)             data.habits = [];
   if (!data.habitCompletions)   data.habitCompletions = {};
   if (!data.habitNotes)         data.habitNotes = {};
-  if (!data.toolkit)            data.toolkit = { statusBreakdown: true, attendance: true, docsOverview: true };
+  if (!data.toolkit)            data.toolkit = { statusBreakdown: true, attendance: true };
   if (data.toolkit.statusBreakdown === undefined) data.toolkit.statusBreakdown = true;
   if (data.toolkit.attendance      === undefined) data.toolkit.attendance      = true;
-  if (data.toolkit.docsOverview    === undefined) data.toolkit.docsOverview    = true;
   if (!data.attendanceSettings) data.attendanceSettings = { allowTrainees: false, workingDays: [1,2,3,4,5] };
   if (!Array.isArray(data.attendanceSettings.workingDays)) data.attendanceSettings.workingDays = [1,2,3,4,5];
-  if (!data.docs) data.docs = [];
-  if (!Array.isArray(data.docs)) data.docs = Object.values(data.docs).filter(Boolean);
   if (!data.rewardSettings) data.rewardSettings = { xpPerCoin: 10, roundingPolicy: 'floor', setupDone: false };
   if (!data.rewardSettings.xpPerCoin) data.rewardSettings.xpPerCoin = 10;
   if (!data.rewards)     data.rewards     = [];
   if (!Array.isArray(data.rewards))     data.rewards     = Object.values(data.rewards).filter(Boolean);
   if (!data.redemptions) data.redemptions = [];
   if (!Array.isArray(data.redemptions)) data.redemptions = Object.values(data.redemptions).filter(Boolean);
+  if (!data.notifications) data.notifications = {};
+  if (!data.adminNotifications) data.adminNotifications = [];
+  if (!Array.isArray(data.adminNotifications)) data.adminNotifications = Object.values(data.adminNotifications).filter(Boolean);
+  // Drop legacy/malformed notifications from an older data shape (missing a
+  // numeric createdAt, or a type this build doesn't recognize) — otherwise
+  // they render as blank, generically-iconed rows grouped under "Invalid Date".
+  const _validNotif = n => n && typeof n.createdAt === 'number' && !!NOTIF_META[n.type];
+  data.adminNotifications = data.adminNotifications.filter(_validNotif);
   if (!data.autoAssignCycle) data.autoAssignCycle = { colorIdx: 0, iconIdx: 0 };
   if (typeof data.autoAssignCycle.colorIdx !== 'number') data.autoAssignCycle.colorIdx = 0;
   if (typeof data.autoAssignCycle.iconIdx  !== 'number') data.autoAssignCycle.iconIdx  = 0;
@@ -1528,8 +1536,9 @@ function patchDB(data) {
       data.submissions[i.id] = {office:0, project:0, bugs:0, suggestions:0, dailyCounts:{}, points:0, pointHistory:[]};
     else if (!data.submissions[i.id].pointHistory)
       data.submissions[i.id].pointHistory = [];
-    if (!data.notifications[i.id])
-      data.notifications[i.id] = [];
+    if (!data.notifications[i.id]) data.notifications[i.id] = [];
+    else if (!Array.isArray(data.notifications[i.id])) data.notifications[i.id] = Object.values(data.notifications[i.id]).filter(Boolean);
+    data.notifications[i.id] = data.notifications[i.id].filter(_validNotif);
   });
   return data;
 }
@@ -1550,7 +1559,19 @@ async function loadDB() {
     db = blankDB();
     await fbWrite(db);
   } else {
+    const _rawArrLen = v => Array.isArray(v) ? v.length : Object.keys(v || {}).length;
+    const rawAdminCt = _rawArrLen(raw.adminNotifications);
+    const rawNotifs = raw.notifications || {};
     db = patchDB(raw);
+    // patchDB() drops legacy/malformed notification entries (see _validNotif)
+    // — persist that cleanup so they don't linger in Firebase and reappear
+    // via the realtime stream. Only bother writing if something was actually removed.
+    try {
+      if ((db.adminNotifications || []).length !== rawAdminCt) await fbPut('adminNotifications', db.adminNotifications);
+      await Promise.all(Object.keys(db.notifications || {}).map(iid => {
+        return db.notifications[iid].length !== _rawArrLen(rawNotifs[iid]) ? fbPut('notifications/' + iid, db.notifications[iid]) : Promise.resolve();
+      }));
+    } catch (e) { /* best-effort cleanup — not critical */ }
   }
   const changed = processRepeatTasks();
   if (changed) await fbWrite(db);
@@ -1622,18 +1643,23 @@ function _nextAutoColorAndIcon() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TASKS + HABITS — REAL-TIME SYNC
+// TASKS + HABITS + NOTIFICATIONS — REAL-TIME SYNC
 // Same technique as the DM feature's unread badge/message stream: a plain
 // browser EventSource against the Firebase REST endpoint (no SDK, no
 // onValue — consistent with how this whole app already talks to Firebase
 // via fbRead/fbWrite/fbPatch/fbPut). One connection streams the entire
 // /txp tree; we only act on the sub-paths that matter here (tasks, habits,
-// taskCompletions, habitCompletions, habitNotes) and ignore everything
-// else (attendance, complaints, feed, etc.).
+// taskCompletions, habitCompletions, habitNotes, notifications,
+// adminNotifications) and ignore everything else (attendance, complaints,
+// feed, etc.).
 //
 // Per agreed scope: covers completion status, notes, checklist, and
 // photos, for BOTH intern and admin views, and applies updates immediately
-// as they arrive — no waiting on or protecting in-progress edits.
+// as they arrive — no waiting on or protecting in-progress edits. The same
+// applies to notifications: pushInternNotif()/pushAdminNotif() write a
+// targeted PUT to notifications/{internId} or adminNotifications, and this
+// stream picks that write up on every other open client/tab live, without
+// needing its own separate EventSource connection.
 // ══════════════════════════════════════════════════════════════════════
 function _thStartRealtime() {
   if (window._thRealtimeES) { window._thRealtimeES.close(); }
@@ -1721,13 +1747,19 @@ function _thApplyRealtimeEvent(path, data, isPatch) {
       db = data;
       if (db.tasks !== undefined) db.tasks = _thNormalizeArrayLike(db.tasks);
       if (db.habits !== undefined) db.habits = _thNormalizeArrayLike(db.habits);
+      if (db.adminNotifications !== undefined) db.adminNotifications = _thNormalizeArrayLike(db.adminNotifications) || [];
+      if (db.notifications && typeof db.notifications === 'object') {
+        Object.keys(db.notifications).forEach(iid => { db.notifications[iid] = _thNormalizeArrayLike(db.notifications[iid]) || []; });
+      }
       _thRefreshVisibleUI();
+      _notifRefreshVisibleUI();
     }
     return;
   }
   const rootKey = segs[0];
 
   let relevant = true;
+  let isNotif = false;
   if (rootKey === 'tasks') {
     // Every existing task write (notes/checklist/etc.) patches the WHOLE
     // array at once, so a live event here always carries the full array.
@@ -1741,10 +1773,33 @@ function _thApplyRealtimeEvent(path, data, isPatch) {
   } else if (rootKey === 'taskCompletions' || rootKey === 'habitCompletions' || rootKey === 'habitNotes') {
     if (!db[rootKey]) db[rootKey] = {};
     _thDeepSet(db, segs, data, isPatch);
+  } else if (rootKey === 'notifications') {
+    // pushInternNotif()/markAllNotifsRead()/onNotifTap() always PUT the
+    // whole per-intern array at notifications/{internId} — segs[1] is that id.
+    if (!db.notifications) db.notifications = {};
+    if (segs.length >= 2) db.notifications[segs[1]] = _thNormalizeArrayLike(data) || [];
+    else if (data && typeof data === 'object') Object.keys(data).forEach(iid => { db.notifications[iid] = _thNormalizeArrayLike(data[iid]) || []; });
+    isNotif = true;
+  } else if (rootKey === 'adminNotifications') {
+    // Always PUT as a whole array too.
+    db.adminNotifications = _thNormalizeArrayLike(data) || [];
+    isNotif = true;
   } else {
     relevant = false;
   }
   if (relevant) _thRefreshVisibleUI();
+  if (isNotif) _notifRefreshVisibleUI();
+}
+
+// Re-renders the Notifications page (if open) and the bell/dot badges —
+// called whenever a live event touches notifications/adminNotifications,
+// including via someone else's tab or a different device.
+function _notifRefreshVisibleUI() {
+  if (!currentUser) return;
+  updateBadges();
+  const ca = document.getElementById('contentArea');
+  if (currentPage === 'internNotifs') renderInternNotifs(ca);
+  else if (currentPage === 'adminNotifs') renderAdminNotifs(ca);
 }
 
 // Re-renders whatever's currently on screen that could be showing the data
@@ -1850,17 +1905,6 @@ function processRepeatTasks() {
         repeat: null
       };
       db.tasks.push(inst);
-
-      // Notify intern only for TODAY's instance (not backfilled past days)
-      if (!tmpl.isPersonal && checkDate === td) {
-        const iid = tmpl.assignedTo;
-        if (!db.notifications[iid]) db.notifications[iid] = [];
-        db.notifications[iid].unshift({
-          id: 'n-' + Date.now() + '-' + iid,
-          msg: `🔁 Recurring task today: "${tmpl.title}"`,
-          type: 'repeat', read: false, date: td
-        });
-      }
 
       lastGen = checkDate;
       tmpl.lastGenerated = checkDate;
@@ -2295,7 +2339,7 @@ function openProfilePopup() {
   const s = db.submissions?.[currentUser.id] || {};
   const pts = s.points || 0;
   const unreadCount = currentRole === 'intern'
-    ? (db.notifications?.[currentUser.id] || []).filter(n => !n.read).length
+    ? ((db.notifications?.[currentUser.id]) || []).filter(n => !n.read).length
     : (db.adminNotifications || []).filter(n => !n.read).length;
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
@@ -2395,7 +2439,6 @@ const internNav = [
   {id:'internLeaderboard', icon:'trophy',          label:'Leaderboard'},
   {id:'internRewards',     icon:'gift',            label:'Rewards'},
   {id:'internFeed',        icon:'message-square',  label:'Feed'},
-  {id:'internDocs',        icon:'file-text',        label:'Docs'},
 ];
 const adminNav = [
   {id:'adminDashboard',  icon:'home',             label:'Dashboard'},
@@ -2467,17 +2510,23 @@ async function navigateTo(page) {
   const footer = document.getElementById('mobBottomNav');
   if (header) header.style.display = '';
   // Don't show footer on leaderboard or rewards page
-  if (footer && page !== 'internLeaderboard' && page !== 'internRewards' && page !== 'dmThread' && page !== 'dmInbox') footer.style.display = '';
+  if (footer && page !== 'internLeaderboard' && page !== 'internRewards' && page !== 'dmThread' && page !== 'dmInbox' && page !== 'internNotifs') footer.style.display = '';
   
   // Show/hide fixed sidebar button for specific pages
   const sidebarBtn = document.getElementById('fixed-sidebar-toggle');
-  const showButtonPages = ['internLeaderboard', 'internRewards', 'internDocs'];
+  const showButtonPages = ['internLeaderboard', 'internRewards'];
   if (sidebarBtn) {
     sidebarBtn.style.display = showButtonPages.includes(page) ? 'flex' : 'none';
   }
   
   // Auto-close More sheet whenever user navigates anywhere
   if (document.getElementById('moreSheetWrapper')) closeMoreSheet();
+  // BUG FIX: window.rwTab is a sticky global, so once Transaction History was opened
+  // it stayed selected on every later normal visit to Rewards (sidebar, home tile,
+  // bottom nav, more-sheet) too. Default back to the Store tab on every navigation
+  // into internRewards, unless this specific navigation asked for another tab via
+  // window._rwForceTab (set by the Total Points card right before calling here).
+  if (page === 'internRewards') { window.rwTab = window._rwForceTab || 'store'; window._rwForceTab = null; }
   // Settings requires 2nd-factor auth — intercept if not yet unlocked
   if (page === 'adminSettings' && !settingsUnlocked) {
     openSettingsLock();
@@ -2505,24 +2554,18 @@ async function navigateTo(page) {
   const isTaskMobile        = page === 'internTasks';
   const isAdminTaskMobile   = page === 'adminTasks';
   const isComplaintMobile   = page === 'internComplaints';
-  const isInternNotifMobile = page === 'internNotifs';
-  const isAdminNotifMobile  = page === 'adminNotifs';
   const tbDefault       = document.getElementById('topbarDefault');
   const tbTasks         = document.getElementById('topbarTasks');
   const tbComplaints    = document.getElementById('topbarComplaints');
-  const tbInternNotifs  = document.getElementById('topbarInternNotifs');
-  const tbAdminNotifs   = document.getElementById('topbarAdminNotifs');
-  const isAlt = isTaskMobile || isAdminTaskMobile || isComplaintMobile || isInternNotifMobile || isAdminNotifMobile;
+  const isAlt = isTaskMobile || isAdminTaskMobile || isComplaintMobile;
   const isProfilePage = page === 'internProfile';
   const isSettingsP   = page === 'internSettings' || page === 'adminAccountSettings' || page === 'adminTrainees';
   const isLeaderboardPage = page === 'internLeaderboard';
   const mainTopbarEl = document.getElementById('mainTopbar');
-  if (mainTopbarEl) mainTopbarEl.style.display = (isProfilePage || isSettingsP || isLeaderboardPage || isTaskMobile || isAdminTaskMobile || page === 'internRewards' || page === 'adminRewards' || page === 'internFeed' || page === 'adminFeed' || page === 'dmInbox' || page === 'dmThread' || page === 'internDashboard' || page === 'adminDashboard') ? 'none' : '';
+  if (mainTopbarEl) mainTopbarEl.style.display = (isProfilePage || isSettingsP || isLeaderboardPage || isTaskMobile || isAdminTaskMobile || page === 'internRewards' || page === 'adminRewards' || page === 'internFeed' || page === 'adminFeed' || page === 'dmInbox' || page === 'dmThread' || page === 'internDashboard' || page === 'adminDashboard' || page === 'internNotifs' || page === 'adminNotifs') ? 'none' : '';
   if (tbDefault)      tbDefault.style.display      = isAlt ? 'none' : 'flex';
   if (tbTasks)        tbTasks.style.display        = isTaskMobile        ? 'flex' : 'none';
   if (tbComplaints)   tbComplaints.style.display   = isComplaintMobile   ? 'flex' : 'none';
-  if (tbInternNotifs) tbInternNotifs.style.display = isInternNotifMobile ? 'flex' : 'none';
-  if (tbAdminNotifs)  tbAdminNotifs.style.display  = isAdminNotifMobile  ? 'flex' : 'none';
   const dmEnvelopeBtn = document.getElementById('dmEnvelopeBtn');
   if (dmEnvelopeBtn) dmEnvelopeBtn.style.display = (page === 'internDashboard' || page === 'adminDashboard') ? 'inline-flex' : 'none';
   // Re-run lucide so topbar icons render correctly after swap
@@ -2531,8 +2574,8 @@ async function navigateTo(page) {
   const mobFabEl = document.getElementById('mobFab');
   const adminFabEl = document.getElementById('adminMobFab');
   const isSettingsPage = page === 'internSettings';
-  if (mobFabEl)   mobFabEl.style.display   = (isTaskMobile||isComplaintMobile||isInternNotifMobile||isProfilePage||isSettingsPage||isLeaderboardPage||page==='internRewards'||page==='internFeed'||page==='dmInbox'||page==='dmThread') ? 'none' : '';
-  if (adminFabEl) adminFabEl.style.display = (isAdminNotifMobile || isAdminTaskMobile || page==='adminFeed' || page==='dmInbox' || page==='dmThread' || page==='adminAccountSettings' || page==='adminTrainees') ? 'none' : '';
+  if (mobFabEl)   mobFabEl.style.display   = (isTaskMobile||isComplaintMobile||isProfilePage||isSettingsPage||isLeaderboardPage||page==='internRewards'||page==='internFeed'||page==='dmInbox'||page==='dmThread'||page==='internNotifs') ? 'none' : '';
+  if (adminFabEl) adminFabEl.style.display = (isAdminTaskMobile || page==='adminFeed' || page==='dmInbox' || page==='dmThread' || page==='adminAccountSettings' || page==='adminTrainees' || page==='adminNotifs') ? 'none' : '';
   document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.sidebar-item-modern').forEach(el => el.classList.remove('active'));
   const el = document.getElementById('nav-' + page); 
@@ -2541,18 +2584,17 @@ async function navigateTo(page) {
   // Update intern bottom nav active state (Duolingo style)
   const mbnMap = {
     internDashboard:'mbn-dashboard', internTasks:'mbn-tasks',
-    internNotifs:'mbn-notifs',       internProfile:'mbn-profile',
+    internProfile:'mbn-profile',
     internSettings:'mbn-profile',    internLeaderboard:'mbn-dashboard',
     internRewards:'mbn-dashboard',   internMorning:'mbn-dashboard',
     internAttendance:'mbn-dashboard',internWorkLog:'mbn-dashboard',
-    internComplaints:'mbn-notifs',   internSubmissions:'mbn-notifs',
-    internDocs:'mbn-notifs',         internFeed:'mbn-feed',
+    internComplaints:'mbn-notifs',   internFeed:'mbn-feed',
   };
   document.querySelectorAll('#mobBottomNav .duo-nav-btn').forEach(b => b.classList.remove('active'));
   const mbnEl = document.getElementById(mbnMap[page]);
   if (mbnEl) mbnEl.classList.add('active');
   // Update admin bottom nav active state
-  const ambnMap = {adminDashboard:'ambn-dashboard',adminTasks:'ambn-tasks',adminNotifs:'ambn-notifs',adminFeed:'ambn-feed',adminTrainees:'ambn-trainees'};
+  const ambnMap = {adminDashboard:'ambn-dashboard',adminTasks:'ambn-tasks',adminFeed:'ambn-feed',adminTrainees:'ambn-trainees'};
   document.querySelectorAll('#mobAdminBottomNav .duo-nav-btn').forEach(b => b.classList.remove('active'));
   const ambnEl = document.getElementById(ambnMap[page]);
   if (ambnEl) ambnEl.classList.add('active');
@@ -2570,10 +2612,6 @@ async function navigateTo(page) {
     internDashboard:    () => renderInternDashboard(ca),
     internTasks:        () => renderInternTasks(ca),
     internComplaints:   () => renderInternComplaints(ca),
-    internSubmissions:  () => navigateTo('internDocs'),
-    internDocs:         () => renderInternDocs(ca),
-    adminDocs:          () => renderAdminDocs(ca),
-    internNotifs:       () => renderInternNotifs(ca),
     internLeaderboard:  () => renderInternLeaderboard(ca),
     internRewards:      () => renderInternRewards(ca),
     internMorning:      () => renderInternMorning(ca),
@@ -2585,10 +2623,7 @@ async function navigateTo(page) {
     attendanceDetail:  () => renderAttendanceDetailPage(ca),
     attendanceByStatus: () => renderAttendanceByStatusPage(ca),
     adminAttendance:   () => renderAdminAttendancePage(ca),
-    docsList:          () => renderDocsListPage(ca),
-    docDetail:         () => renderDocDetailPage(ca),
     adminTasks:        () => renderAdminTasks(ca),
-    adminNotifs:       () => renderAdminNotifs(ca),
     adminComplaints:   () => renderAdminComplaints(ca),
     adminSettings:     () => renderAdminSettings(ca),
     adminAccountSettings: () => renderAdminAccountSettings(ca),
@@ -2599,6 +2634,8 @@ async function navigateTo(page) {
     internFeed:        () => renderInternFeed(ca),
     dmInbox:           () => renderDmInbox(ca),
     dmThread:          () => renderDmThread(ca),
+    internNotifs:      () => renderInternNotifs(ca),
+    adminNotifs:       () => renderAdminNotifs(ca),
   };
   if (map[page]) map[page]();
   updateBadges();
@@ -2624,8 +2661,6 @@ function showPageSkeleton(ca, page) {
     internComplaints:   card(line() + line('60%')) + card(line() + line('60%')),
     adminComplaints:    card(line() + line('60%')) + card(line() + line('60%')),
     adminToolkit:       card(line('40%') + line() + line('60%')) + card(line('40%') + line() + line('60%')),
-    internNotifs:       card(line() + line('80%')) + card(line() + line('60%')),
-    adminNotifs:        card(line() + line('80%')) + card(line() + line('60%')),
     adminSettings:      dashSk + card(line() + line('50%') + line('80%')),
     internLeaderboard:  card(line('40%','22px')) + card(line() + line('80%') + line('60%') + line('70%') + line('50%')),
     internRewards:      gridSk + card(line('60%') + line('80%')),
@@ -2651,56 +2686,216 @@ function updateBadges() {
   const mobFab  = document.getElementById('mobFab');
   const showIntern = isLoggedIn && !isLoginActive && currentRole === 'intern';
   const showAdmin  = isLoggedIn && !isLoginActive && currentRole === 'admin';
-  if (mobNav)  mobNav.style.display  = (showIntern && currentPage !== 'internRewards' && currentPage !== 'dmThread' && currentPage !== 'dmInbox') ? 'flex' : 'none';
-  if (adminNv) adminNv.style.display = (showAdmin  && currentPage !== 'adminRewards'  && currentPage !== 'dmThread' && currentPage !== 'dmInbox') ? 'flex' : 'none';
-  if (mobFab)  mobFab.style.display  = (showIntern && currentPage !== 'internRewards' && currentPage !== 'dmThread' && currentPage !== 'dmInbox') ? 'flex' : 'none';
+  const isViewingOtherProfile = currentPage === 'internProfile' && window._viewingProfileId && window._viewingProfileId !== currentUser?.id;
+  const hideInternNav = currentPage === 'internRewards' || currentPage === 'dmThread' || currentPage === 'dmInbox' || currentPage === 'internLeaderboard' || currentPage === 'internNotifs' || isViewingOtherProfile;
+  if (mobNav)  mobNav.style.display  = (showIntern && !hideInternNav) ? 'flex' : 'none';
+  if (adminNv) adminNv.style.display = (showAdmin  && currentPage !== 'adminRewards'  && currentPage !== 'dmThread' && currentPage !== 'dmInbox' && currentPage !== 'adminNotifs') ? 'flex' : 'none';
+  if (mobFab)  mobFab.style.display  = (showIntern && !hideInternNav) ? 'flex' : 'none';
   // REQ 2: Admin FAB
   const adminFab = document.getElementById('adminMobFab');
-  if (adminFab) adminFab.style.display = (showAdmin && currentPage !== 'adminRewards' && currentPage !== 'dmThread' && currentPage !== 'dmInbox') ? 'flex' : 'none';
+  if (adminFab) adminFab.style.display = (showAdmin && currentPage !== 'adminRewards' && currentPage !== 'dmThread' && currentPage !== 'dmInbox' && currentPage !== 'adminNotifs') ? 'flex' : 'none';
 
-  if (currentRole === 'intern') {
-    const n = (db.notifications?.[currentUser.id] || []).filter(x => !x.read).length;
-    const el = document.getElementById('sb-notif');
-    if (el) { el.textContent = n || ''; el.className = 'sidebar-badge' + (n ? ' show' : ''); }
-    const nd = document.getElementById('notifDot');
-    if (nd) nd.className = 'notif-dot' + (n ? ' show' : '');
-    const mbnNotifBadge = document.getElementById('mbn-notif-badge');
-    if (mbnNotifBadge) mbnNotifBadge.className = 'mbn-badge' + (n ? ' show' : '');
-    // Sidebar header bell dot
-    const snd = document.getElementById('sidebarNotifDot');
-    if (snd) snd.style.display = n ? 'block' : 'none';
-    // Mobile avatar red dot
-    const mad = document.getElementById('mobAvatarDot');
-    if (mad) {
-      if (n > 0) { mad.textContent = n > 9 ? '9+' : n; mad.classList.add('show'); }
-      else { mad.textContent = ''; mad.classList.remove('show'); }
-    }
-  } else {
+  if (currentRole !== 'intern') {
     const nc = (db.complaints || []).filter(c => !c.read).length;
-    const na = (db.adminNotifications || []).filter(n => !n.read).length;
-    const nr = (db.pendingRequests || []).filter(r => r.status === 'pending').length;
-    const total = nc + na + nr;
     const elc = document.getElementById('sb-complaint');
     if (elc) { elc.textContent = nc || ''; elc.className = 'sidebar-badge' + (nc ? ' show' : ''); }
-    const nd = document.getElementById('notifDot');
-    if (nd) nd.className = 'notif-dot' + (total ? ' show' : '');
-    // Sidebar header bell dot (admin)
-    const snd = document.getElementById('sidebarNotifDot');
-    if (snd) snd.style.display = total ? 'block' : 'none';
-    // Admin mobile avatar dot
-    const mad = document.getElementById('mobAvatarDot');
-    if (mad) {
-      if (total > 0) { mad.textContent = total > 9 ? '9+' : total; mad.classList.add('show'); }
-      else { mad.textContent = ''; mad.classList.remove('show'); }
-    }
-    // Admin bottom nav badges
     const ambnBadge = document.getElementById('ambn-badge');
     if (ambnBadge) ambnBadge.className = 'mbn-badge' + (nc ? ' show' : '');
-    const ambnNotif = document.getElementById('ambn-notif-badge');
-    if (ambnNotif) ambnNotif.className = 'mbn-badge' + ((na + nr) ? ' show' : '');
   }
+
+  // Notification bell badges (bell icon on Home + sidebar dot + avatar dot)
+  const notifCt = currentRole === 'intern'
+    ? ((db.notifications?.[currentUser.id]) || []).filter(n => !n.read).length
+    : (db.adminNotifications || []).filter(n => !n.read).length;
+  ['idashNotifBadge', 'adhNotifBadge'].forEach(bid => {
+    const el = document.getElementById(bid); if (!el) return;
+    if (notifCt > 0) { el.textContent = notifCt > 99 ? '99+' : String(notifCt); el.style.display = 'block'; }
+    else el.style.display = 'none';
+  });
+  const sidebarDot = document.getElementById('sidebarNotifDot');
+  if (sidebarDot) sidebarDot.classList.toggle('show', notifCt > 0);
+  const avatarDot = document.getElementById('mobAvatarDot');
+  if (avatarDot) avatarDot.classList.toggle('show', notifCt > 0);
 }
 
+// ╔══════════════════════════════════════════════════╗
+// ║             NOTIFICATIONS                        ║
+// ╚══════════════════════════════════════════════════╝
+// db.notifications = { [internId]: [ {id,type,title,body,read,createdAt,...extra} ] }
+// db.adminNotifications = [ {id,type,title,body,read,createdAt,...extra} ]
+const NOTIF_MAX_PER_INBOX = 200;
+
+const NOTIF_META = {
+  task_assigned:    { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/></svg>', label:'Task Assigned',    color:'#3b82f6', bg:'rgba(59,130,246,.12)' },
+  task_completed:   { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', label:'Task Completed', color:'#22c55e', bg:'rgba(34,197,94,.12)' },
+  habit_assigned:   { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>', label:'Habit Assigned',   color:'#f59e0b', bg:'rgba(245,158,11,.12)' },
+  habit_completed:  { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>', label:'Habit Completed', color:'#f59e0b', bg:'rgba(245,158,11,.12)' },
+  reward_created:   { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>', label:'New Reward', color:'#8b5cf6', bg:'rgba(139,92,246,.12)' },
+  reward_redeemed:  { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>', label:'Reward Redeemed', color:'#ef4444', bg:'rgba(239,68,68,.12)' },
+  reward_approved:  { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>', label:'Reward Approved', color:'#22c55e', bg:'rgba(34,197,94,.12)' },
+  reward_rejected:  { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>', label:'Reward Rejected', color:'#ef4444', bg:'rgba(239,68,68,.12)' },
+  reward_delivered: { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>', label:'Reward Delivered', color:'#6c5ce7', bg:'rgba(108,92,231,.12)' },
+  post_created:     { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>', label:'New Post', color:'#6366f1', bg:'rgba(99,102,241,.12)' },
+  chat_message:     { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>', label:'New Message', color:'#14b8a6', bg:'rgba(20,184,166,.12)' },
+  _default:         { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>', label:'Notification', color:'#6c5ce7', bg:'rgba(108,92,231,.12)' },
+};
+
+// Push a notification into one intern's inbox. Fire-and-forget persistence —
+// callers don't need to await this or fold it into their own save flow.
+async function pushInternNotif(internId, notif) {
+  if (!db) return;
+  if (!db.notifications) db.notifications = {};
+  const key = String(internId);
+  if (!db.notifications[key]) db.notifications[key] = [];
+  const entry = Object.assign({
+    id: 'n-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+    read: false, createdAt: Date.now(),
+  }, notif);
+  db.notifications[key].unshift(entry);
+  if (db.notifications[key].length > NOTIF_MAX_PER_INBOX) db.notifications[key].length = NOTIF_MAX_PER_INBOX;
+  try { await fbPut('notifications/' + key, db.notifications[key]); } catch (e) { console.warn('Notif sync error', e); }
+  if (currentUser && currentRole === 'intern' && String(currentUser.id) === key) updateBadges();
+}
+
+// Broadcast the same notification to many interns — internIds may be an
+// array of ids, or the string 'all' (or an array containing 'all').
+function pushInternNotifBroadcast(internIds, notif) {
+  const wantsAll = internIds === 'all' || (Array.isArray(internIds) && internIds.includes('all'));
+  const ids = wantsAll ? INTERNS.filter(i => i.id !== 99).map(i => i.id) : internIds;
+  (ids || []).forEach(id => pushInternNotif(id, notif));
+}
+
+async function pushAdminNotif(notif) {
+  if (!db) return;
+  if (!db.adminNotifications) db.adminNotifications = [];
+  const entry = Object.assign({
+    id: 'an-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+    read: false, createdAt: Date.now(),
+  }, notif);
+  db.adminNotifications.unshift(entry);
+  if (db.adminNotifications.length > NOTIF_MAX_PER_INBOX) db.adminNotifications.length = NOTIF_MAX_PER_INBOX;
+  try { await fbPut('adminNotifications', db.adminNotifications); } catch (e) { console.warn('Notif sync error', e); }
+  if (currentRole === 'admin') updateBadges();
+}
+
+// Groups a notification list by day (Today/Yesterday/date) and renders rows
+// in the same visual language as Transaction History (.rwh-row/.rwh-icon/etc).
+function _renderNotifList(list, isAdmin) {
+  if (!list || !list.length) {
+    return `<div class="rw-empty"><div style="font-size:48px;margin-bottom:12px;">🔔</div><div class="rw-empty-title">No notifications yet</div><div class="rw-empty-sub">You're all caught up</div></div>`;
+  }
+  const groups = {};
+  list.slice().sort((a, b) => b.createdAt - a.createdAt).forEach(n => {
+    const d = new Date(n.createdAt), td = new Date(), yd = new Date(); yd.setDate(yd.getDate() - 1);
+    const lbl = d.toDateString() === td.toDateString() ? 'Today' : d.toDateString() === yd.toDateString() ? 'Yesterday' : d.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
+    if (!groups[lbl]) groups[lbl] = [];
+    groups[lbl].push(n);
+  });
+  return Object.entries(groups).map(([date, items]) => {
+    const rows = items.map((n, i) => {
+      const meta = NOTIF_META[n.type] || NOTIF_META._default;
+      const ts = n.createdAt ? new Date(n.createdAt) : null;
+      const timeStr = ts && !isNaN(ts.getTime()) ? ts.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }) : '';
+      const styles = (i === items.length - 1 ? 'border-bottom:none;' : '') + (!n.read ? 'background:rgba(232,93,38,.05);' : '') + 'cursor:pointer;';
+      return `<div class="rwh-row" style="${styles}" onclick="onNotifTap('${n.id}',${isAdmin})">
+        <div class="rwh-icon" style="background:${meta.bg};color:${meta.color};">${meta.icon}</div>
+        <div class="rwh-body">
+          <div class="rwh-title-row"><div class="rwh-title">${sanitize(n.title || meta.label)}</div>${!n.read ? '<span class="rwh-unread-dot"></span>' : ''}</div>
+          <div class="rwh-meta">${sanitize(n.body || '')}</div>
+        </div>
+        <div class="rwh-right"><div class="rwh-bal">${timeStr}</div></div>
+      </div>`;
+    }).join('');
+    return `<div class="ardm-date-group"><div class="ardm-date-label">${date}</div><div class="rwh-card">${rows}</div></div>`;
+  }).join('');
+}
+
+function renderInternNotifs(ca) {
+  if (!ca) return;
+  const list = (db.notifications && db.notifications[currentUser.id]) || [];
+  const unreadCt = list.filter(n => !n.read).length;
+  ca.innerHTML = `
+    <div class="rws-page-header">
+      <button class="rws-back-btn" onclick="navigateTo('internDashboard')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="rws-page-title">Notifications</span>
+      ${unreadCt > 0 ? `<span class="arw-toggle-link" style="flex-shrink:0;white-space:nowrap;" onclick="markAllNotifsRead(false)">Mark all read</span>` : `<div style="width:36px;"></div>`}
+    </div>
+    <div class="rw-body" style="padding:14px 14px 32px;">${_renderNotifList(list, false)}</div>`;
+  const _nav = document.getElementById('mobBottomNav');
+  const _fab = document.getElementById('mobFab');
+  if (_nav) _nav.style.display = 'none';
+  if (_fab) _fab.style.display = 'none';
+  if (window.lucide) lucide.createIcons();
+}
+
+function renderAdminNotifs(ca) {
+  if (!ca) return;
+  const list = db.adminNotifications || [];
+  const unreadCt = list.filter(n => !n.read).length;
+  ca.innerHTML = `
+    <div class="rws-page-header">
+      <button class="rws-back-btn" onclick="navigateTo('adminDashboard')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="rws-page-title">Notifications</span>
+      ${unreadCt > 0 ? `<span class="arw-toggle-link" style="flex-shrink:0;white-space:nowrap;" onclick="markAllNotifsRead(true)">Mark all read</span>` : `<div style="width:36px;"></div>`}
+    </div>
+    <div class="rw-body" style="padding:14px 14px 32px;">${_renderNotifList(list, true)}</div>`;
+  const _nav = document.getElementById('mobAdminBottomNav');
+  const _fab = document.getElementById('adminMobFab');
+  if (_nav) _nav.style.display = 'none';
+  if (_fab) _fab.style.display = 'none';
+  if (window.lucide) lucide.createIcons();
+}
+
+async function markAllNotifsRead(isAdmin) {
+  if (isAdmin) {
+    (db.adminNotifications || []).forEach(n => n.read = true);
+    try { await fbPut('adminNotifications', db.adminNotifications); } catch (e) {}
+    renderAdminNotifs(document.getElementById('contentArea'));
+  } else {
+    const list = (db.notifications && db.notifications[currentUser.id]) || [];
+    list.forEach(n => n.read = true);
+    try { await fbPut('notifications/' + currentUser.id, list); } catch (e) {}
+    renderInternNotifs(document.getElementById('contentArea'));
+  }
+  updateBadges();
+}
+
+async function onNotifTap(id, isAdmin) {
+  const list = isAdmin ? (db.adminNotifications || []) : ((db.notifications && db.notifications[currentUser.id]) || []);
+  const n = list.find(x => x.id === id);
+  if (!n) return;
+  if (!n.read) {
+    n.read = true;
+    try { await (isAdmin ? fbPut('adminNotifications', db.adminNotifications) : fbPut('notifications/' + currentUser.id, list)); } catch (e) {}
+    updateBadges();
+  }
+  switch (n.type) {
+    case 'chat_message':
+      if (n.otherUserId != null) { openDmThread(n.otherUserId); return; }
+      break;
+    case 'task_assigned': case 'task_completed':
+      navigateTo(isAdmin ? 'adminTasks' : 'internTasks'); return;
+    case 'habit_assigned': case 'habit_completed':
+      navigateTo(isAdmin ? 'adminTasks' : 'internTasks'); return;
+    case 'reward_created':
+      window._rwForceTab = 'store'; navigateTo('internRewards'); return;
+    case 'reward_approved': case 'reward_rejected': case 'reward_delivered':
+      window._rwForceTab = 'mine'; navigateTo('internRewards'); return;
+    case 'reward_redeemed':
+      window.adminRwTab = 'approvals_all'; navigateTo('adminRewards'); return;
+    case 'post_created':
+      navigateTo(isAdmin ? 'adminFeed' : 'internFeed'); return;
+  }
+  // Fallback: just re-render this page so the read-state visual updates.
+  if (isAdmin) renderAdminNotifs(document.getElementById('contentArea'));
+  else renderInternNotifs(document.getElementById('contentArea'));
+}
+
+// Notification bell — navigates to each role's Notifications page.
 function handleNotifClick() { navigateTo(currentRole === 'admin' ? 'adminNotifs' : 'internNotifs'); }
 
 // ╔══════════════════════════════════════════════════╗
@@ -3457,6 +3652,11 @@ function renderInternDashboard(ca) {
       <button class="idash-hamburger" onclick="toggleMobileSidebar()" aria-label="Menu">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
+      <div style="flex:1;"></div>
+      <button class="idash-chat-btn" onclick="handleNotifClick()" aria-label="Notifications">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        <span class="dm-envelope-badge" id="idashNotifBadge" style="display:none;"></span>
+      </button>
       <button class="idash-chat-btn" onclick="navigateTo('dmInbox')" aria-label="Messages">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         <span class="dm-envelope-badge" id="dmEnvelopeBadgeHome" style="display:none;"></span>
@@ -3470,7 +3670,7 @@ function renderInternDashboard(ca) {
     </div>
 
     <!-- ── Points card ── -->
-    <div class="points-big intern-pts-card points-card-clickable" onclick="openStatDetail('points')" style="align-items:flex-start;">
+    <div class="points-big intern-pts-card points-card-clickable" onclick="window._rwForceTab='history';navigateTo('internRewards')" style="align-items:center;">
       <!-- LEFT: points info -->
       <div>
         <div class="points-label">TOTAL POINTS</div>
@@ -3483,7 +3683,7 @@ function renderInternDashboard(ca) {
       </div>
       <!-- RIGHT: rocket badge -->
       <div class="idash-rocket-badge">
-        <img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f680.svg" width="40" height="40" alt="">
+        <span class="idash-trophy-emoji">🏆</span>
       </div>
     </div>
 
@@ -5313,6 +5513,15 @@ function renderInternProfile(ca, viewingUserId = null) {
   const isOwnProfile = (id === currentUser.id);
   const intern = INTERNS.find(i => i.id === id);
   if (!intern) return;
+  const _nav = document.getElementById('mobBottomNav');
+  const _fab = document.getElementById('mobFab');
+  if (!isOwnProfile) {
+    if (_nav) _nav.style.display = 'none';
+    if (_fab) _fab.style.display = 'none';
+  } else {
+    if (_nav) _nav.style.display = '';
+    if (_fab) _fab.style.display = '';
+  }
   const s          = db.submissions[id] || {};
   const pts        = s.points || 0;
   const ob         = getObedience(id);
@@ -5526,9 +5735,10 @@ function renderInternProfile(ca, viewingUserId = null) {
         <div class="np2-topbar2-titles">
           <div class="np2-topbar2-pagetitle">Profile</div>
         </div>
-        <button class="np2-icon-btn" onclick="openProfileMenu()">
-          <svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg>
-        </button>
+        ${isOwnProfile ? `
+        <button class="np2-icon-btn np2-settings-btn" onclick="navigateTo('internSettings')" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>` : ''}
       </div>
     </div><!-- /np2-hd -->
 
@@ -6408,46 +6618,9 @@ function openAdminFabSheet() {
         </div>
         <i data-lucide="chevron-right" style="width:16px;height:16px;color:var(--text3);flex-shrink:0;"></i>
       </button>
-      <button class="fab-sheet-btn" onclick="closeModal();openAnnouncementModal()">
-        <div class="fab-sheet-icon" style="background:rgba(99,102,241,.15);">
-          <i data-lucide="megaphone" style="width:20px;height:20px;color:#6366f1;"></i>
-        </div>
-        <div class="fab-sheet-text">
-          <div class="fab-sheet-label">Announcement</div>
-          <div class="fab-sheet-sub">Broadcast a message to all interns</div>
-        </div>
-        <i data-lucide="chevron-right" style="width:16px;height:16px;color:var(--text3);flex-shrink:0;"></i>
-      </button>
     </div>
   `);
   if (window.lucide) lucide.createIcons(); initCarousels();
-}
-
-// ── Announcement modal ──
-function openAnnouncementModal() {
-  openModal(`<div class="modal-title">📢 New Announcement</div>
-    <div class="form-group"><label>Title *</label><input type="text" id="annTitle" placeholder="Announcement title"></div>
-    <div class="form-group"><label>Message *</label><textarea id="annBody" rows="4" placeholder="Write your message to all interns..."></textarea></div>
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-primary" onclick="saveAnnouncement()">📢 Send</button>
-    </div>`);
-}
-
-async function saveAnnouncement() {
-  const title = document.getElementById('annTitle').value.trim();
-  const body  = document.getElementById('annBody').value.trim();
-  if (!title || !body) { showToast('Title and message required', 'error'); return; }
-  const ann = { id:'ann-'+Date.now(), title, body, date:today(), createdBy:'admin' };
-  if (!db.announcements) db.announcements = [];
-  db.announcements.unshift(ann);
-  // Notify all interns
-  INTERNS.filter(i => i.id !== 99).forEach(i => {
-    if (!db.notifications[i.id]) db.notifications[i.id] = [];
-    db.notifications[i.id].unshift({ id:'n-ann-'+Date.now()+'-'+i.id, msg:`📢 Announcement: "${title}"`, type:'announcement', read:false, date:today(), annId:ann.id });
-  });
-  closeModal();
-  await saveAndRefresh('Announcement sent!', 'adminNotifs');
 }
 
 function openRequestSheet() {
@@ -6749,60 +6922,15 @@ async function submitRequest() {
   }
   if (!db.pendingRequests) db.pendingRequests = [];
   db.pendingRequests.unshift(reqData);
-  // Push to adminNotifications so the bell lights up
-  db.adminNotifications.unshift({ id: 'an-req-'+Date.now(), msg: reqData.msg, read: false, date: today(), isRequest: true, requestId: reqData.id });
   closeModal();
   await saveAndRefresh('Request sent! Waiting for admin approval.', 'internDashboard');
 }
 
-async function approveRequest(reqId) {
-  const req = (db.pendingRequests || []).find(r => r.id === reqId); if (!req) return;
-  req.status = 'approved';
-  const iid = req.internId;
-  const s = db.submissions[iid] || {};
-  if (req.type === 'entry') {
-    const catKey = CAT_KEYS[req.category];
-    const td = today(); const dk = td + '-' + catKey;
-    s.dailyCounts = s.dailyCounts || {};
-    s[catKey] = (s[catKey] || 0) + 1;
-    // BUG-16 FIX: increment dailyCounts so subsequent real submissions hit the limit correctly
-    s.dailyCounts[dk] = (s.dailyCounts[dk] || 0) + 1;
-    const _rawReqPts = (db.catPoints || DEF_POINTS)[req.category] || 5;
-    const pts = (isFinite(_rawReqPts) && !isNaN(_rawReqPts)) ? Math.max(0, Math.min(_rawReqPts, 9999)) : 5;
-    s.points = Math.max(0, (s.points || 0) + pts);
-    db.submissions[iid] = s;
-    awardCoins(iid, pts, 'entry', req.category, req.id);
-    if (!db.notifications[iid]) db.notifications[iid] = [];
-    db.notifications[iid].unshift({ id:'n-'+Date.now(), msg:`✅ Your entry request for "${req.category}" was approved! +${pts} pts`, type:'request', read:false, date:today() });
-  } else if (req.type === 'task') {
-    const key = req.taskId + '-' + iid;
-    if (!db.taskCompletions[key]?.done) {
-      db.taskCompletions[key] = { done: true };
-      const task = db.tasks.find(t => t.id === req.taskId);
-      if (task?.points) {
-        s.points = (s.points || 0) + task.points;
-        db.submissions[iid] = s;
-        awardCoins(iid, task.points, 'task', task.title, task.id);
-      }
-      if (!db.notifications[iid]) db.notifications[iid] = [];
-      db.notifications[iid].unshift({ id:'n-'+Date.now(), msg:`✅ Your task completion request for "${sanitize(req.taskTitle)}" was approved!`, type:'request', read:false, date:today() });
-    }
-  }
-  const an = db.adminNotifications.find(n => n.requestId === reqId);
-  if (an) an.read = true;
-  await saveAndRefresh('Request approved!', 'adminNotifs');
-}
-
-async function denyRequest(reqId) {
-  const req = (db.pendingRequests || []).find(r => r.id === reqId); if (!req) return;
-  req.status = 'denied';
-  const iid = req.internId;
-  if (!db.notifications[iid]) db.notifications[iid] = [];
-  db.notifications[iid].unshift({ id:'n-'+Date.now(), msg:`❌ Your request for "${req.type === 'entry' ? req.category : req.taskTitle}" was denied by admin.`, type:'request', read:false, date:today() });
-  const an = db.adminNotifications.find(n => n.requestId === reqId);
-  if (an) an.read = true;
-  await saveAndRefresh('Request denied', 'adminNotifs');
-}
+// NOTE: approveRequest()/denyRequest() (the admin Approve/Deny actions for pending
+// entry & task requests) were removed along with the Notifications pages, since their
+// only UI lived there. db.pendingRequests entries are still created by submitRequest()
+// and still show as "in review" on task cards, but nothing currently resolves them —
+// that'll need a new home once notifications are rebuilt.
 
 // ╔══════════════════════════════════════════════════╗
 // ║              INTERN TASKS (KANBAN)               ║
@@ -8105,10 +8233,6 @@ async function submitAttendance(cat, date) {
       date, attStatus: status, note, taskTitle: cat,
       requestDate: today()
     });
-    db.adminNotifications.unshift({
-      id:'an-'+Date.now(), msg:`${currentUser.name} sent attendance request (${cat})`,
-      type:'request', read:false, date:today(), internId:currentUser.id
-    });
   } else {
     // Verify code
     if (!code) { showToast('Enter contributor code', 'error'); return; }
@@ -8200,80 +8324,12 @@ async function submitLogEntry(cat) {
 }
 
 
-// ── Intern Notif Filter ────────────────────────────────
-function _populateInternNotifFilter() {
-  const dd = document.getElementById('internNotifFilterDropdown');
-  if (!dd) return;
-  const status = window.internNotifFilter || 'Announcements';
-  dd.innerHTML = ['Announcements','Tasks','Entries'].map(s=>
-    `<div class="it-filter-opt ${status===s?'active':''}" onclick="setInternNotifFilter('${s}')">${s}</div>`
-  ).join('');
-}
-function toggleNotifFilter() {
-  const dd = document.getElementById('internNotifFilterDropdown');
-  if (!dd) return;
-  _populateInternNotifFilter();
-  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-}
-function toggleNotifSearch() {
-  const bar = document.getElementById('inSearchBar');
-  if (!bar) return;
-  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
-}
-function setInternNotifFilter(status) {
-  window.internNotifFilter = status;
-  const dd = document.getElementById('internNotifFilterDropdown');
-  if (dd) dd.style.display = 'none';
-  renderInternNotifs(document.getElementById('contentArea'));
-}
-
-// ── Admin Notif Filter ─────────────────────────────────
-function _populateAdminNotifFilter() {
-  const dd = document.getElementById('adminNotifFilterDropdown');
-  if (!dd) return;
-  const status = window.adminNotifFilter || 'Entries';
-  dd.innerHTML = ['Entries','Tasks','Complaints'].map(s=>
-    `<div class="it-filter-opt ${status===s?'active':''}" onclick="setAdminNotifFilter('${s}')">${s}</div>`
-  ).join('');
-}
-function toggleAdminNotifFilter() {
-  const dd = document.getElementById('adminNotifFilterDropdown');
-  if (!dd) return;
-  _populateAdminNotifFilter();
-  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-}
-function setAdminNotifFilter(status) {
-  window.adminNotifFilter = status;
-  const dd = document.getElementById('adminNotifFilterDropdown');
-  if (dd) dd.style.display = 'none';
-  renderAdminNotifs(document.getElementById('contentArea'));
-}
-
 // Close any open it-filter-dropdown when clicking outside
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.it-topbar-filter-wrap')) {
     document.querySelectorAll('.it-filter-dropdown').forEach(dd => dd.style.display = 'none');
   }
 }, true);
-
-
-
-
-// BUG-15 FIX: Dismiss ribbon optimistically hides it immediately, then saves in background
-async function dismissRibbon(id) {
-  (db.notifications[id] || []).forEach(n => n.read = true);
-  updateBadges();
-  _thpRefreshAll();
-  try { await saveDB(); showStatus('✓ Notifications cleared'); }
-  catch(e) { showToast('Could not save — please sync', 'error'); }
-}
-
-async function markNotifsRead(id) {
-  (db.notifications[id] || []).forEach(n => n.read = true);
-  await saveDB();
-  updateBadges();
-  _thpRefreshAll();
-}
 
 function renderKanbanCol(cat, tasks, id) {
   const cls = cat.toLowerCase();
@@ -8934,6 +8990,10 @@ async function ntdChangeStatus(taskId, iid, newStatus) {
         // how task completion elsewhere in the app already does it.
         coinsEarned = awardCoins(uid, pts, 'task', task.title, taskId);
       }
+      if (currentRole === 'intern') {
+        const internName = INTERNS.find(i => i.id === uid)?.name || currentUser?.name || 'Intern';
+        pushAdminNotif({ type:'task_completed', title:'Task Completed', body:`${internName} completed "${task.title}"`, internId: uid });
+      }
     }
     if (task.inProgress) task.inProgress = task.inProgress.filter(id => id !== uid);
   } else {
@@ -9178,10 +9238,6 @@ async function tdpSubmitCode(tid, iid) {
     db.submissions[iid].pointHistory = db.submissions[iid].pointHistory||[];
     db.submissions[iid].pointHistory.unshift({type:'task_approval',label:task.title,pts:task.points,date:today()});
   }
-  if (!task.isPersonal) {
-    const intern = INTERNS.find(i=>i.id==iid);
-    db.adminNotifications.unshift({id:'an-'+Date.now(),msg:`${intern?.name||'Intern'} completed (code): "${task.title}"`,read:false,date:today(),internId:iid,taskId:tid});
-  }
   playSuccessSound();
   closeTdp();
   await saveAndRefresh('Task completed! +' + (task.points||0) + ' pts', 'internTasks');
@@ -9344,11 +9400,10 @@ async function completeTask(tid, iid, circleEl, source) {
     updateBadges();
   }, async () => {
     // ─── COMMIT ───
-    if (!task.isPersonal) {
-      const intern = INTERNS.find(i => i.id == iid);
-      db.adminNotifications.unshift({ id:'an-'+Date.now(), msg:`${sanitize(intern?.name||'Intern')} completed: "${sanitize(task.title)}"`, read:false, date:today(), internId:iid, taskId:tid });
+    try {
+      await saveDB(); showStatus('✓ Saved!'); updateBadges();
+      pushAdminNotif({ type:'task_completed', title:'Task Completed', body:`${currentUser.name} completed "${task.title}"`, internId: iid });
     }
-    try { await saveDB(); showStatus('✓ Saved!'); updateBadges(); }
     catch(e) { showToast('Save failed — please sync.', 'error'); }
   });
 }
@@ -9384,10 +9439,6 @@ async function submitApproval(tid, iid) {
     const _tp = Math.max(0, Math.min(task.points || 0, 9999));
     db.submissions[iid].points = Math.max(0, (db.submissions[iid].points || 0) + _tp);
   }
-  if (!task.isPersonal) {
-    const intern = INTERNS.find(i => i.id == iid);
-    db.adminNotifications.unshift({id:'an-'+Date.now(), msg:`${intern?.name||'Intern'} completed (approved): "${task.title}"`, read:false, date:today(), internId:iid, taskId:tid});
-  }
   // Add to point history
   if (task.points) {
     db.submissions[iid].pointHistory = db.submissions[iid].pointHistory || [];
@@ -9395,6 +9446,7 @@ async function submitApproval(tid, iid) {
   }
   playSuccessSound();
   closeModal();
+  pushAdminNotif({ type:'task_completed', title:'Task Completed', body:`${currentUser.name} completed "${task.title}"`, internId: iid });
   await saveAndRefresh('Approved & completed! +' + (task.points||0) + ' pts', 'internTasks');
 }
 
@@ -10782,72 +10834,6 @@ async function saveCustomTask() {
 
 
 // ╔══════════════════════════════════════════════════╗
-// ║   INTERN ALERTS — tabbed (req 7)
-// ╚══════════════════════════════════════════════════╝
-function renderInternNotifs(ca) {
-  const all = db.notifications?.[currentUser.id] || [];
-  const hadUnread = all.some(n => !n.read);
-  all.forEach(n => n.read = true);
-  if (hadUnread) saveDB();
-  updateBadges();
-
-  const announcements = (db.announcements||[]);
-  const taskNotifs    = all.filter(n => n.type==='task' || n.type==='repeat');
-  const entryNotifs   = all.filter(n => n.type==='entry' || n.type==='request');
-
-  const filterVal = window.internNotifFilter || 'Announcements';
-
-  const notifCard = n => {
-    const iconMap = { task:'✅', repeat:'🔁', entry:'📊', request:'📨', announcement:'📢' };
-    const bgMap   = { task:'rgba(39,174,96,.1)', repeat:'rgba(99,102,241,.1)', entry:'rgba(232,93,38,.1)', request:'rgba(79,70,229,.1)', announcement:'rgba(99,102,241,.1)' };
-    return `<div class="notif-item">
-      <div class="notif-item-icon" style="background:${bgMap[n.type]||'rgba(232,93,38,.1)'};">${iconMap[n.type]||'🔔'}</div>
-      <div class="notif-item-body"><div class="notif-item-msg">${sanitize(n.msg)}</div><div class="notif-item-date">${sanitize(n.date||'')}</div></div>
-    </div>`;
-  };
-
-  let content = '';
-  if (filterVal === 'Announcements') {
-    const annHTML = announcements.slice(0,20).map(a => `
-      <div class="announcement-card">
-        <div class="ann-header"><span class="ann-badge">📢 Announcement</span><span style="font-size:11px;color:var(--text3);margin-left:auto;">${sanitize(a.date||'')}</span></div>
-        <div class="ann-title">${sanitize(a.title)}</div>
-        <div class="ann-body">${sanitize(a.body)}</div>
-      </div>`).join('');
-    content = annHTML || `<div class="txp-empty">No announcements yet.</div>`;
-  } else if (filterVal === 'Tasks') {
-    content = taskNotifs.length ? taskNotifs.map(notifCard).join('') : `<div class="txp-empty">No task notifications.</div>`;
-  } else {
-    content = entryNotifs.length ? entryNotifs.map(notifCard).join('') : `<div class="txp-empty">No entry notifications.</div>`;
-  }
-
-  ca.innerHTML = `<div class="it-page">
-    <div class="it-search-bar" id="inSearchBar" style="display:none;"></div>
-    <div class="txp-list" style="padding:12px 4px 0;">${content}</div>
-  </div>`;
-
-  _populateInternNotifFilter();
-  if (window.lucide) lucide.createIcons(); initCarousels();
-}
-function setInternNotifTab(tab) {
-  window.internNotifTab = tab;
-  renderInternNotifs(document.getElementById('contentArea'));
-}
-
-async function markOneNotifRead(idx) {
-  const notifs = db.notifications[currentUser.id];
-  if (notifs && notifs[idx]) { notifs[idx].read = true; await saveDB(); }
-  updateBadges();
-  renderInternNotifs(document.getElementById('contentArea'));
-}
-
-async function markAllNotifsRead() {
-  (db.notifications[currentUser.id] || []).forEach(n => n.read = true);
-  await saveDB(); updateBadges();
-  renderInternNotifs(document.getElementById('contentArea'));
-}
-
-// ╔══════════════════════════════════════════════════╗
 // ║              INTERN COMPLAINTS                   ║
 // ╚══════════════════════════════════════════════════╝
 function renderInternComplaints(ca) {
@@ -10952,519 +10938,6 @@ window.submissionState = {
   filter: 'all'
 };
 
-// ╔══════════════════════════════════════════════════════╗
-// ║                    DOCS SYSTEM                       ║
-// ╚══════════════════════════════════════════════════════╝
-
-const DOC_CATS = {
-  request:   { label:'Request',   color:'#3b82f6', bg:'rgba(59,130,246,.1)',  icon:'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>' },
-  inquiry:   { label:'Inquiry',   color:'#8b5cf6', bg:'rgba(139,92,246,.1)',  icon:'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' },
-  complaint: { label:'Complaint', color:'#ef4444', bg:'rgba(239,68,68,.1)',   icon:'<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>' },
-};
-const DOC_STATUS = {
-  open:       { label:'Open',        color:'#3b82f6', bg:'rgba(59,130,246,.1)'  },
-  inprogress: { label:'In Progress', color:'#f59e0b', bg:'rgba(245,158,11,.1)'  },
-  resolved:   { label:'Resolved',    color:'#22c55e', bg:'rgba(34,197,94,.1)'   },
-};
-const DOC_PRIORITY = {
-  low:    { label:'Low',    color:'#9ca3af' },
-  medium: { label:'Medium', color:'#f59e0b' },
-  high:   { label:'High',   color:'#ef4444' },
-};
-
-function _docTimeAgo(ts) {
-  const diff = Date.now() - ts;
-  if (diff < 60000)    return 'Just now';
-  if (diff < 3600000)  return Math.floor(diff/60000) + 'm ago';
-  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
-  return Math.floor(diff/86400000) + 'd ago';
-}
-
-// ── INTERN DOCS PAGE ─────────────────────────────────────
-function renderInternDocs(ca) {
-  const id   = currentUser.id;
-  const myDocs = (db.docs||[]).filter(d => d.from === id || d.to === id).sort((a,b)=>b.createdAt-a.createdAt);
-  const activeTab = window.internDocsTab || 'inbox';
-  const filterCat = window.internDocsCat || 'all';
-
-  let filtered = myDocs;
-  if (filterCat !== 'all') filtered = myDocs.filter(d => d.category === filterCat);
-
-  const unread = myDocs.filter(d => d.from === id && d.replies?.length && !d.readByIntern).length;
-
-  const buildDocRow = (doc) => {
-    const cat    = DOC_CATS[doc.category]  || DOC_CATS.request;
-    const status = DOC_STATUS[doc.status]  || DOC_STATUS.open;
-    const isUnread = doc.from === id && doc.replies?.length && !doc.readByIntern;
-    const lastReply = doc.replies?.length ? doc.replies[doc.replies.length-1] : null;
-    const preview  = lastReply ? lastReply.body : doc.body;
-    return `
-    <div class="doc-row${isUnread?' doc-row-unread':''}" onclick="openDocThread('${doc.id}')">
-      <div class="doc-row-left">
-        <div class="doc-cat-icon" style="background:${cat.bg};color:${cat.color};">${cat.icon}</div>
-      </div>
-      <div class="doc-row-body">
-        <div class="doc-row-top">
-          <span class="doc-row-subject${isUnread?' doc-unread-text':''}">${sanitize(doc.subject)}</span>
-          <span class="doc-row-time">${_docTimeAgo(doc.createdAt)}</span>
-        </div>
-        <div class="doc-row-preview">${sanitize((preview||'').slice(0,60))}${(preview||'').length>60?'…':''}</div>
-        <div class="doc-row-chips">
-          <span class="doc-chip" style="background:${cat.bg};color:${cat.color};">${cat.label}</span>
-          <span class="doc-chip" style="background:${status.bg};color:${status.color};">${status.label}</span>
-          ${doc.replies?.length ? `<span class="doc-chip" style="background:rgba(0,0,0,.05);color:var(--text3);">${doc.replies.length} repl${doc.replies.length===1?'y':'ies'}</span>`:''}
-        </div>
-      </div>
-      ${isUnread?'<div class="doc-unread-dot"></div>':''}
-    </div>`;
-  };
-
-  const listHtml = filtered.length === 0
-    ? `<div class="doc-empty">
-        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        <div class="doc-empty-title">No docs yet</div>
-        <div class="doc-empty-sub">Tap + to send your first message to admin</div>
-      </div>`
-    : filtered.map(buildDocRow).join('');
-
-  ca.innerHTML = `
-    <div class="docs-page">
-      <div class="docs-header">
-        <button class="docs-back-btn" onclick="navigateTo('internDashboard')">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <span class="docs-header-title">Docs</span>
-        <button class="docs-compose-btn" onclick="openDocCompose()">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          New
-        </button>
-      </div>
-
-      <div class="docs-cat-filter">
-        ${['all','request','inquiry','complaint'].map(c => {
-          const isAll = c==='all';
-          const cat = isAll ? null : DOC_CATS[c];
-          const count = isAll ? myDocs.length : myDocs.filter(d=>d.category===c).length;
-          return `<button class="docs-cat-pill${filterCat===c?' docs-cat-active':''}"
-            style="${filterCat===c&&!isAll?`border-color:${cat.color};color:${cat.color};`:''};"
-            onclick="window.internDocsCat='${c}';renderInternDocs(document.getElementById('contentArea'))">
-            ${isAll?'All':cat.label} <span class="docs-cat-count">${count}</span>
-          </button>`;
-        }).join('')}
-      </div>
-
-      <div class="docs-list">${listHtml}</div>
-    </div>`;
-  if (window.lucide) lucide.createIcons();
-}
-
-// ── ADMIN DOCS PAGE ──────────────────────────────────────
-function renderAdminDocs(ca) {
-  const activeTab = window.adminDocsTab || 'inbox';
-  const filterCat = window.adminDocsCat || 'all';
-  const filterStatus = window.adminDocsStatus || 'all';
-  const interns = INTERNS.filter(i=>i.id!==99);
-
-  const allDocs = (db.docs||[]).sort((a,b)=>b.createdAt-a.createdAt);
-  let filtered = allDocs;
-  if (filterCat !== 'all')    filtered = filtered.filter(d=>d.category===filterCat);
-  if (filterStatus !== 'all') filtered = filtered.filter(d=>d.status===filterStatus);
-
-  const unreadCount = allDocs.filter(d=>!d.readByAdmin).length;
-
-  // ── Analytics data ──
-  const totalByCategory = { request:0, inquiry:0, complaint:0 };
-  const totalByStatus   = { open:0, inprogress:0, resolved:0 };
-  const byIntern = {};
-  allDocs.forEach(d => {
-    if (totalByCategory[d.category]!==undefined) totalByCategory[d.category]++;
-    if (totalByStatus[d.status]!==undefined)     totalByStatus[d.status]++;
-    const intern = interns.find(i=>i.id===d.from);
-    if (intern) { byIntern[d.from] = byIntern[d.from]||{name:intern.name,count:0}; byIntern[d.from].count++; }
-  });
-  const catMax = Math.max(...Object.values(totalByCategory),1);
-
-  const buildAdminDocRow = (doc) => {
-    const cat    = DOC_CATS[doc.category]  || DOC_CATS.request;
-    const status = DOC_STATUS[doc.status]  || DOC_STATUS.open;
-    const prio   = DOC_PRIORITY[doc.priority||'medium'];
-    const intern = interns.find(i=>i.id===doc.from);
-    const initials = intern ? intern.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) : 'AN';
-    const isUnread = !doc.readByAdmin;
-    return `
-    <div class="doc-row${isUnread?' doc-row-unread':''}" onclick="openDocThread('${doc.id}',true)">
-      <div class="doc-avatar">${initials}</div>
-      <div class="doc-row-body">
-        <div class="doc-row-top">
-          <span class="doc-row-subject${isUnread?' doc-unread-text':''}">${sanitize(doc.subject)}</span>
-          <span class="doc-row-time">${_docTimeAgo(doc.createdAt)}</span>
-        </div>
-        <div class="doc-row-from">${sanitize(intern?.name||'Unknown')}</div>
-        <div class="doc-row-chips">
-          <span class="doc-chip" style="background:${cat.bg};color:${cat.color};">${cat.label}</span>
-          <span class="doc-chip" style="background:${status.bg};color:${status.color};">${status.label}</span>
-          <span class="doc-prio-dot" style="background:${prio.color};" title="${prio.label} priority"></span>
-        </div>
-      </div>
-      ${isUnread?'<div class="doc-unread-dot"></div>':''}
-    </div>`;
-  };
-
-  const inboxHtml = filtered.length === 0
-    ? `<div class="doc-empty"><svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="1.2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><div class="doc-empty-title">No docs yet</div><div class="doc-empty-sub">Interns will send messages here</div></div>`
-    : filtered.map(buildAdminDocRow).join('');
-
-  const analyticsHtml = `
-    <div class="doc-analytics">
-      <div class="doc-analytics-row">
-        <div class="doc-stat-card"><div class="doc-stat-n">${allDocs.length}</div><div class="doc-stat-l">Total</div></div>
-        <div class="doc-stat-card"><div class="doc-stat-n" style="color:#3b82f6;">${totalByStatus.open}</div><div class="doc-stat-l">Open</div></div>
-        <div class="doc-stat-card"><div class="doc-stat-n" style="color:#f59e0b;">${totalByStatus.inprogress}</div><div class="doc-stat-l">In Progress</div></div>
-        <div class="doc-stat-card"><div class="doc-stat-n" style="color:#22c55e;">${totalByStatus.resolved}</div><div class="doc-stat-l">Resolved</div></div>
-      </div>
-      <div class="doc-analytics-section">
-        <div class="doc-analytics-title">By Category</div>
-        ${Object.entries(totalByCategory).map(([cat,n])=>{
-          const c = DOC_CATS[cat];
-          return `<div class="doc-bar-row">
-            <span class="doc-bar-label" style="color:${c.color};">${c.label}</span>
-            <div class="doc-bar-track"><div class="doc-bar-fill" style="width:${Math.round(n/catMax*100)}%;background:${c.color};"></div></div>
-            <span class="doc-bar-val">${n}</span>
-          </div>`;
-        }).join('')}
-      </div>
-      <div class="doc-analytics-section">
-        <div class="doc-analytics-title">By Intern</div>
-        ${Object.values(byIntern).sort((a,b)=>b.count-a.count).slice(0,5).map(({name,count})=>{
-          const initials = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-          return `<div class="doc-intern-row">
-            <div class="doc-avatar doc-avatar-sm">${initials}</div>
-            <span class="doc-intern-name">${sanitize(name)}</span>
-            <div class="doc-bar-track" style="flex:1;"><div class="doc-bar-fill" style="width:${Math.round(count/allDocs.length*100)}%;background:var(--accent);"></div></div>
-            <span class="doc-bar-val">${count}</span>
-          </div>`;
-        }).join('') || '<div style="color:var(--text3);font-size:13px;padding:8px 0;">No data yet</div>'}
-      </div>
-    </div>`;
-
-  ca.innerHTML = `
-    <div class="docs-page">
-      <div class="docs-header">
-        <button class="docs-back-btn" onclick="navigateTo('adminDashboard')">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <span class="docs-header-title">Docs ${unreadCount?`<span class="docs-header-badge">${unreadCount}</span>`:''}</span>
-        <button class="docs-compose-btn" onclick="openAdminDocCompose()">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Send
-        </button>
-      </div>
-
-      <div class="docs-tabs">
-        <button class="docs-tab${activeTab==='inbox'?' docs-tab-on':''}" onclick="window.adminDocsTab='inbox';renderAdminDocs(document.getElementById('contentArea'))">Inbox ${unreadCount?`<span class="docs-tab-badge">${unreadCount}</span>`:''}</button>
-        <button class="docs-tab${activeTab==='analytics'?' docs-tab-on':''}" onclick="window.adminDocsTab='analytics';renderAdminDocs(document.getElementById('contentArea'))">Analytics</button>
-      </div>
-
-      ${activeTab==='inbox' ? `
-        <div class="docs-filter-bar">
-          ${['all','request','inquiry','complaint'].map(c=>{
-            const isAll=c==='all'; const cat=isAll?null:DOC_CATS[c];
-            const count=isAll?allDocs.length:allDocs.filter(d=>d.category===c).length;
-            return `<button class="docs-cat-pill${filterCat===c?' docs-cat-active':''}"
-              style="${filterCat===c&&!isAll?`border-color:${cat.color};color:${cat.color};`:''}"
-              onclick="window.adminDocsCat='${c}';renderAdminDocs(document.getElementById('contentArea'))">
-              ${isAll?'All':cat.label} <span class="docs-cat-count">${count}</span>
-            </button>`;
-          }).join('')}
-          <div class="docs-filter-sep"></div>
-          ${['all','open','inprogress','resolved'].map(s=>{
-            const isAll=s==='all'; const st=isAll?null:DOC_STATUS[s];
-            return `<button class="docs-cat-pill${filterStatus===s?' docs-cat-active':''}"
-              style="${filterStatus===s&&!isAll?`border-color:${st.color};color:${st.color};`:''}"
-              onclick="window.adminDocsStatus='${s}';renderAdminDocs(document.getElementById('contentArea'))">
-              ${isAll?'All Status':st.label}
-            </button>`;
-          }).join('')}
-        </div>
-        <div class="docs-list">${inboxHtml}</div>
-      ` : analyticsHtml}
-    </div>`;
-  if (window.lucide) lucide.createIcons();
-}
-
-// ── THREAD VIEW ──────────────────────────────────────────
-function openDocThread(docId, isAdmin) {
-  const doc = (db.docs||[]).find(d=>d.id===docId);
-  if (!doc) return;
-
-  // Mark as read
-  if (isAdmin && !doc.readByAdmin) {
-    doc.readByAdmin = true;
-    fbPatch(`docs`, db.docs.reduce((o,d,i)=>{o[i]=d;return o;},{}));
-  }
-  if (!isAdmin && !doc.readByIntern) {
-    doc.readByIntern = true;
-    fbPatch(`docs`, db.docs.reduce((o,d,i)=>{o[i]=d;return o;},{}));
-  }
-
-  const cat    = DOC_CATS[doc.category]  || DOC_CATS.request;
-  const status = DOC_STATUS[doc.status]  || DOC_STATUS.open;
-  const prio   = DOC_PRIORITY[doc.priority||'medium'];
-  const intern = INTERNS.find(i=>i.id===doc.from);
-  const initials = intern ? intern.name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) : 'AN';
-
-  const formatTs = ts => new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-
-  const buildBubble = (msg, idx) => {
-    const fromAdmin = msg.from === 'admin';
-    const fromSelf  = isAdmin ? fromAdmin : !fromAdmin;
-    return `<div class="doc-bubble-wrap${fromSelf?' doc-bubble-self':''}">
-      ${!fromSelf?`<div class="doc-bubble-avatar">${fromAdmin?'Ad':initials}</div>`:''}
-      <div class="doc-bubble${fromSelf?' doc-bubble-sent':''}">
-        <div class="doc-bubble-body">${sanitize(msg.body)}</div>
-        <div class="doc-bubble-time">${formatTs(msg.at)}</div>
-      </div>
-    </div>`;
-  };
-
-  const statusChanger = isAdmin ? `
-    <div class="doc-thread-actions">
-      <div class="doc-thread-action-label">Status</div>
-      <div class="doc-status-btns">
-        ${['open','inprogress','resolved'].map(s=>{
-          const st=DOC_STATUS[s];
-          return `<button class="doc-status-btn${doc.status===s?' doc-status-btn-active':''}"
-            style="${doc.status===s?`background:${st.bg};color:${st.color};border-color:${st.color};`:''}"
-            onclick="setDocStatus('${docId}','${s}',${!!isAdmin})">${st.label}</button>`;
-        }).join('')}
-      </div>
-    </div>` : '';
-
-  const sheet = document.createElement('div');
-  sheet.id = 'docThreadSheet';
-  sheet.innerHTML = `
-    <div class="doc-thread-overlay" onclick="closeDocThread(${!!isAdmin})"></div>
-    <div class="doc-thread-page" id="docThreadInner">
-
-      <div class="doc-thread-header">
-        <button class="docs-back-btn" onclick="closeDocThread(${!!isAdmin})">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <div class="doc-thread-header-body">
-          <div class="doc-thread-subject">${sanitize(doc.subject)}</div>
-          <div class="doc-thread-meta">
-            <span class="doc-chip" style="background:${cat.bg};color:${cat.color};">${cat.label}</span>
-            <span class="doc-chip" style="background:${status.bg};color:${status.color};">${status.label}</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="doc-thread-scroll">
-        <!-- Original message as first bubble -->
-        <div class="doc-bubble-wrap${isAdmin?'':' doc-bubble-self'}">
-          ${isAdmin?`<div class="doc-bubble-avatar">${initials}</div>`:''}
-          <div class="doc-bubble${isAdmin?'':' doc-bubble-sent'}">
-            <div class="doc-bubble-body">${sanitize(doc.body)}</div>
-            <div class="doc-bubble-time">${formatTs(doc.createdAt)}</div>
-          </div>
-        </div>
-        ${(doc.replies||[]).map((r,i)=>buildBubble(r,i)).join('')}
-        <div style="height:80px;"></div>
-      </div>
-
-      ${statusChanger}
-
-      <div class="doc-reply-bar">
-        <textarea class="doc-reply-input" id="docReplyInput" placeholder="Type a reply…" rows="1" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
-        <button class="doc-reply-send" onclick="sendDocReply('${docId}',${!!isAdmin})">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-        </button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(sheet);
-  requestAnimationFrame(()=>{
-    sheet.querySelector('#docThreadInner').classList.add('doc-thread-open');
-    if (window.lucide) lucide.createIcons();
-    // Scroll to bottom
-    setTimeout(()=>{ const s=sheet.querySelector('.doc-thread-scroll'); if(s) s.scrollTop=s.scrollHeight; },100);
-  });
-}
-
-function closeDocThread(isAdmin) {
-  document.getElementById('docThreadSheet')?.remove();
-  const ca = document.getElementById('contentArea');
-  if (isAdmin) renderAdminDocs(ca); else renderInternDocs(ca);
-}
-
-async function sendDocReply(docId, isAdmin) {
-  const input = document.getElementById('docReplyInput');
-  const body  = input?.value.trim();
-  if (!body) return;
-  const doc = (db.docs||[]).find(d=>d.id===docId);
-  if (!doc) return;
-  if (!doc.replies) doc.replies = [];
-  doc.replies.push({ from: isAdmin?'admin':String(currentUser.id), body, at: Date.now() });
-  // Mark unread for the other party
-  if (isAdmin) { doc.readByIntern = false; } else { doc.readByAdmin = false; }
-  input.value = '';
-  try {
-    await fbPut('docs', db.docs);
-    showToast('✅ Reply sent');
-    // Re-render thread
-    const sheet = document.getElementById('docThreadSheet');
-    if (sheet) { sheet.remove(); openDocThread(docId, isAdmin); }
-  } catch(e) { showToast('❌ Send failed'); }
-}
-
-async function setDocStatus(docId, status, isAdmin) {
-  const doc = (db.docs||[]).find(d=>d.id===docId);
-  if (!doc) return;
-  doc.status = status;
-  try {
-    await fbPut('docs', db.docs);
-    showToast('✅ Status updated');
-    document.getElementById('docThreadSheet')?.remove();
-    openDocThread(docId, isAdmin);
-  } catch(e) { showToast('❌ Update failed'); }
-}
-
-// ── COMPOSE SHEETS ───────────────────────────────────────
-function openDocCompose() {
-  document.getElementById('docComposeSheet')?.remove();
-  const sheet = document.createElement('div');
-  sheet.id = 'docComposeSheet';
-  sheet.innerHTML = `
-    <div class="tc-backdrop" onclick="document.getElementById('docComposeSheet')?.remove()"></div>
-    <div class="tc-sheet" id="docComposeInner">
-      <div class="tc-handle"></div>
-      <div class="doc-compose-header">
-        <span class="doc-compose-title">New Message</span>
-        <button class="doc-compose-send-btn" onclick="submitNewDoc()">Send</button>
-      </div>
-      <div class="doc-compose-body">
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Category</label>
-          <select class="doc-compose-select" id="docCat">
-            <option value="request">Request</option>
-            <option value="inquiry">Inquiry</option>
-            <option value="complaint">Complaint</option>
-          </select>
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Priority</label>
-          <select class="doc-compose-select" id="docPrio">
-            <option value="low">Low</option>
-            <option value="medium" selected>Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Subject</label>
-          <input type="text" class="doc-compose-input" id="docSubject" placeholder="Brief subject line…" maxlength="80">
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Message</label>
-          <textarea class="doc-compose-textarea" id="docBody" placeholder="Describe your request in detail…" rows="5"></textarea>
-        </div>
-      </div>
-    </div>`;
-  document.body.appendChild(sheet);
-  requestAnimationFrame(()=>{ sheet.querySelector('#docComposeInner').classList.add('tc-sheet-open'); });
-}
-
-function openAdminDocCompose() {
-  document.getElementById('docComposeSheet')?.remove();
-  const interns = INTERNS.filter(i=>i.id!==99);
-  const sheet = document.createElement('div');
-  sheet.id = 'docComposeSheet';
-  sheet.innerHTML = `
-    <div class="tc-backdrop" onclick="document.getElementById('docComposeSheet')?.remove()"></div>
-    <div class="tc-sheet" id="docComposeInner">
-      <div class="tc-handle"></div>
-      <div class="doc-compose-header">
-        <span class="doc-compose-title">Send Message</span>
-        <button class="doc-compose-send-btn" onclick="submitAdminDoc()">Send</button>
-      </div>
-      <div class="doc-compose-body">
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">To</label>
-          <select class="doc-compose-select" id="docTo">
-            <option value="all">All Interns</option>
-            ${interns.map(i=>`<option value="${i.id}">${sanitize(i.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Category</label>
-          <select class="doc-compose-select" id="docCat">
-            <option value="request">Request</option>
-            <option value="inquiry">Inquiry</option>
-            <option value="complaint">Complaint</option>
-          </select>
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Subject</label>
-          <input type="text" class="doc-compose-input" id="docSubject" placeholder="Subject…" maxlength="80">
-        </div>
-        <div class="doc-compose-field">
-          <label class="doc-compose-label">Message</label>
-          <textarea class="doc-compose-textarea" id="docBody" placeholder="Write your message…" rows="5"></textarea>
-        </div>
-      </div>
-    </div>`;
-  document.body.appendChild(sheet);
-  requestAnimationFrame(()=>{ sheet.querySelector('#docComposeInner').classList.add('tc-sheet-open'); });
-}
-
-async function submitNewDoc() {
-  const subject  = document.getElementById('docSubject')?.value.trim();
-  const body     = document.getElementById('docBody')?.value.trim();
-  const category = document.getElementById('docCat')?.value;
-  const priority = document.getElementById('docPrio')?.value;
-  if (!subject) { showToast('⚠️ Subject is required'); return; }
-  if (!body)    { showToast('⚠️ Message body is required'); return; }
-  const doc = {
-    id: 'doc-'+Date.now(), from: currentUser.id, to: 'admin',
-    subject, body, category, priority, status: 'open',
-    createdAt: Date.now(), replies: [], readByAdmin: false, readByIntern: true
-  };
-  if (!db.docs) db.docs = [];
-  db.docs.unshift(doc);
-  document.getElementById('docComposeSheet')?.remove();
-  try {
-    await fbPut('docs', db.docs);
-    showToast('✅ Message sent to admin');
-    renderInternDocs(document.getElementById('contentArea'));
-  } catch(e) { showToast('❌ Send failed'); }
-}
-
-async function submitAdminDoc() {
-  const subject  = document.getElementById('docSubject')?.value.trim();
-  const body     = document.getElementById('docBody')?.value.trim();
-  const category = document.getElementById('docCat')?.value;
-  const toVal    = document.getElementById('docTo')?.value;
-  if (!subject) { showToast('⚠️ Subject is required'); return; }
-  if (!body)    { showToast('⚠️ Message body is required'); return; }
-  if (!db.docs) db.docs = [];
-  const targets = toVal==='all' ? INTERNS.filter(i=>i.id!==99).map(i=>i.id) : [parseInt(toVal)];
-  targets.forEach(internId => {
-    db.docs.unshift({
-      id: 'doc-'+Date.now()+'-'+internId, from: 99, to: internId,
-      subject, body, category, priority:'medium', status:'open',
-      createdAt: Date.now(), replies: [], readByAdmin: true, readByIntern: false
-    });
-  });
-  document.getElementById('docComposeSheet')?.remove();
-  try {
-    await fbPut('docs', db.docs);
-    showToast(`✅ Sent to ${targets.length} intern${targets.length>1?'s':''}`);
-    renderAdminDocs(document.getElementById('contentArea'));
-  } catch(e) { showToast('❌ Send failed'); }
-}
-
-// Backward-compat redirect
-function renderInternSubmissions(ca) { navigateTo('internDocs'); }
-
 // ╔══════════════════════════════════════════════════╗
 // ║           INTERN LEADERBOARD PAGE                ║
 // ╚══════════════════════════════════════════════════╝
@@ -11478,6 +10951,10 @@ function setLbPeriod(period) {
   renderInternLeaderboard(document.getElementById('contentArea'));
 }
 function renderInternLeaderboard(ca) {
+  const _nav = document.getElementById('mobBottomNav');
+  const _fab = document.getElementById('mobFab');
+  if (_nav) _nav.style.display = 'none';
+  if (_fab) _fab.style.display = 'none';
   const myId = currentUser.id;
   window._lbPeriod = window._lbPeriod || 'week';
   const period = window._lbPeriod;
@@ -11536,8 +11013,8 @@ function renderInternLeaderboard(ca) {
   ca.innerHTML = `
     <div class="lb2-page">
       <div class="lb2-header">
-        <button type="button" class="lb2-hamburger" onclick="toggleMobileSidebar()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        <button type="button" class="lb2-hamburger" onclick="navigateTo('internDashboard')" aria-label="Back">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
         <div class="lb2-header-titles">
           <button type="button" class="lb2-period-btn" onclick="toggleLbPeriodMenu(event)">
@@ -11670,7 +11147,14 @@ function renderInternRewards(ca) {
   };
 
   // ── WALLET TAB ────────────────────────────────────
+  const rwMonths=[];{const now=new Date();for(let i=0;i<6;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);rwMonths.push({key:_monthKey(d),label:i===0?'This Month':d.toLocaleString('default',{month:'long',year:'numeric'})});}}
+  const rwFilterMonth = window.internRwMonth || _thisMonth();
   const myRdm = (db.redemptions||[]).filter(r=>r.internId===id);
+  const myRdmInMonth = myRdm.filter(r=>{const d=new Date(r.createdAt);return _monthKey(d)===rwFilterMonth;});
+  const myRdmFiltered = window.internRwMonthAll ? myRdm : myRdmInMonth;
+  const myPendingCt   = myRdmFiltered.filter(r=>r.status==='pending').length;
+  const myApprovedCt  = myRdmFiltered.filter(r=>r.status==='approved'||r.status==='completed').length;
+  const myDeliveredCt = myRdmFiltered.filter(r=>r.status==='delivered').length;
   const pendingRdm = myRdm.filter(r=>r.status==='pending').length;
 
   const walletTab = `
@@ -11742,41 +11226,57 @@ function renderInternRewards(ca) {
   };
 
   const storeTab = `
-    <div class="rws-hero">
-      <div>
-        <div class="rws-hero-label">Available Coins</div>
-        <div class="rws-hero-amount"><span class="rws-hero-coin">🪙</span><span class="rws-hero-num">${wallet.balance.toLocaleString()}</span></div>
-        <div class="rws-hero-xp">1 Coin = ${rate} XP</div>
+    <div class="arw-ov-card">
+      <div class="arw-ov-header">
+        <span class="arw-ov-title">Overview</span>
+        <div style="position:relative;display:flex;align-items:center;">
+          <select class="arw-month-sel" onchange="window.internRwMonth=this.value;window.internRwMonthAll=false;renderInternRewards(document.getElementById('contentArea'))">
+            ${rwMonths.map(m=>`<option value="${m.key}"${rwFilterMonth===m.key?' selected':''}>${m.label}</option>`).join('')}
+          </select>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="2.5" style="position:absolute;right:10px;pointer-events:none;"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
       </div>
-      <div class="rws-hero-chest">🏆</div>
+      <div class="arw-ov-grid">
+        <div class="arw-ov-stat">
+          <div><div class="arw-ov-stat-lbl">Points Earned</div><div class="arw-ov-stat-val">${wallet.totalEarned.toLocaleString()}</div></div>
+          <div class="arw-ov-stat-icon" style="background:#fff;color:#6c5ce7;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+        </div>
+        <div class="arw-ov-stat">
+          <div><div class="arw-ov-stat-lbl">Remaining Points</div><div class="arw-ov-stat-val">${wallet.balance.toLocaleString()}</div></div>
+          <div class="arw-ov-stat-icon" style="background:#fff;color:#22c55e;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
+        </div>
+        <div class="arw-ov-stat">
+          <div><div class="arw-ov-stat-lbl">Total Redemptions</div><div class="arw-ov-stat-val">${myRdmFiltered.length}</div></div>
+          <div class="arw-ov-stat-icon" style="background:#fff;color:#e17055;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></div>
+        </div>
+        <div class="arw-ov-stat">
+          <div><div class="arw-ov-stat-lbl">Active Rewards</div><div class="arw-ov-stat-val">${(db.rewards||[]).filter(r=>r.active!==false).length}</div></div>
+          <div class="arw-ov-stat-icon" style="background:#fff;color:#22c55e;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        </div>
+      </div>
     </div>
 
-    <div class="rws-section-row">
-      <span class="rws-section-title">Categories</span>
-      <span class="rws-view-all" onclick="window.rwStoreCat='all';renderInternRewards(document.getElementById('contentArea'))">View All</span>
+    <div class="arw-section-row">
+      <span class="arw-section-title">Redemptions Overview</span>
+      <span class="arw-toggle-link" onclick="window.internRwMonthAll=!window.internRwMonthAll;renderInternRewards(document.getElementById('contentArea'))">${window.internRwMonthAll?'All time ▾':'This Month ▾'}</span>
     </div>
-    <div class="rws-cat-scroll">
-      ${catKeys.map(c=>{
-        const isAll = c==='all';
-        const cat = CATS[c];
-        const on = catFilter===c;
-        const accentColor = isAll ? '#6c5ce7' : cat.color;
-        const iconBg  = on ? accentColor        : (isAll ? 'rgba(108,92,231,.1)' : cat.bg);
-        const iconClr = on ? '#fff'             : accentColor;
-        const textClr = on ? accentColor        : 'var(--text2)';
-        const bdrClr  = on ? accentColor        : 'var(--border)';
-        return `<button class="rws-cat-pill${on?' rws-cat-on':''}"
-          onclick="window.rwStoreCat='${c}';renderInternRewards(document.getElementById('contentArea'))">
-          <span class="rws-cat-icon-wrap" style="background:${iconBg};border-color:${bdrClr};color:${iconClr};">
-            ${CAT_SVG[c]||CAT_SVG.physical}
-          </span>
-          <span style="font-size:11px;font-weight:${on?700:500};color:${textClr};">${isAll ? 'All' : cat.label}</span>
-        </button>`;
-      }).join('')}
+    <div class="arw-rdm-stats">
+      <div class="arw-rdm-stat-card">
+        <div class="arw-rdm-stat-top"><span class="arw-rdm-stat-lbl">Pending</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <div class="arw-rdm-stat-num">${myPendingCt}</div>
+      </div>
+      <div class="arw-rdm-stat-card">
+        <div class="arw-rdm-stat-top"><span class="arw-rdm-stat-lbl">Approved</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.8" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        <div class="arw-rdm-stat-num">${myApprovedCt}</div>
+      </div>
+      <div class="arw-rdm-stat-card">
+        <div class="arw-rdm-stat-top"><span class="arw-rdm-stat-lbl">Delivered</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6c5ce7" stroke-width="1.8" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+        <div class="arw-rdm-stat-num">${myDeliveredCt}</div>
+      </div>
     </div>
 
     <div class="rws-section-row" style="margin-top:4px;">
-      <span class="rws-section-title">Popular Rewards</span>
+      <span class="rws-section-title">Active Rewards</span>
     </div>
     ${shown.length===0
       ? `<div class="rw-empty"><div style="font-size:48px;margin-bottom:12px;">🛍️</div><div class="rw-empty-title">No rewards yet</div><div class="rw-empty-sub">Admin hasn't added any rewards</div></div>`
@@ -11807,65 +11307,128 @@ function renderInternRewards(ca) {
 
   // ── HISTORY TAB ───────────────────────────────────
   const txns = wallet.transactions||[];
+  // Classic line-icons (same lucide style used by the homepage Categories row)
+  // instead of emoji, to match Reward/Attendance/Leaderboard/Learning there.
+  const TXN_SRC = {
+    task:       { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/></svg>', label:'Task Completed',    color:'#3b82f6', bg:'rgba(59,130,246,.12)'  },
+    habit:      { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>', label:'Habit Completed',   color:'#f59e0b', bg:'rgba(245,158,11,.12)'  },
+    entry:      { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>', label:'Entry Submitted',   color:'#8b5cf6', bg:'rgba(139,92,246,.12)'  },
+    manual:     { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>', label:'Admin Adjustment',  color:'#6b7280', bg:'rgba(107,114,128,.12)' },
+    redemption: { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8s1-5 4.5-5a2.5 2.5 0 0 1 0 5"/></svg>', label:'Reward Redeemed',   color:'#ef4444', bg:'rgba(239,68,68,.12)'   },
+  };
   const histTab = !txns.length
     ? `<div class="rw-empty"><div style="font-size:48px;margin-bottom:12px;">📊</div><div class="rw-empty-title">No transactions yet</div><div class="rw-empty-sub">Complete tasks & habits to start earning</div></div>`
     : (() => {
         const groups={};
-        txns.forEach(t=>{
+        txns.slice().sort((a,b)=>b.timestamp-a.timestamp).forEach(t=>{
           const d=new Date(t.timestamp),td=new Date(),yd=new Date();yd.setDate(yd.getDate()-1);
-          const lbl=d.toDateString()===td.toDateString()?'Today':d.toDateString()===yd.toDateString()?'Yesterday':d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          const lbl=d.toDateString()===td.toDateString()?'Today':d.toDateString()===yd.toDateString()?'Yesterday':d.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
           if(!groups[lbl])groups[lbl]=[];groups[lbl].push(t);
         });
-        const srcIco={task:'📋',habit:'🔥',entry:'📝',manual:'⚙️',redemption:'🎁'};
-        return Object.entries(groups).map(([date,items])=>`
-          <div class="rw-txn-group">
-            <div class="rw-txn-date-label">${date}</div>
-            ${items.map(t=>`
-            <div class="rw-txn-row">
-              <div class="rw-txn-src">${srcIco[t.source]||'🪙'}</div>
-              <div class="rw-txn-body">
-                <div class="rw-txn-name">${sanitize(t.sourceTitle||t.source||'Reward')}</div>
-                <div class="rw-txn-sub">${t.xpEarned?'+'+t.xpEarned+' XP ÷ '+t.conversionRate:''} · ${new Date(t.timestamp).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+        return Object.entries(groups).map(([date,items])=>{
+          const rows = items.map((t,i) => {
+            const meta = TXN_SRC[t.source] || { icon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>', label:'Coin Activity', color:'#6c5ce7', bg:'rgba(108,92,231,.12)' };
+            const coinsChange = t.coinsChange || 0;
+            const isPositive = coinsChange >= 0;
+            const subParts = [meta.label];
+            const ts = t.timestamp ? new Date(t.timestamp) : null;
+            if (ts && !isNaN(ts.getTime())) subParts.push(ts.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}));
+            // XP now gets its own emphasized pill next to the title instead of being
+            // buried as plain text inside the "·"-joined meta line.
+            const xpBadge = t.xpEarned ? `<span class="rwh-xp-badge">+${t.xpEarned} XP</span>` : '';
+            return `<div class="rwh-row"${i===items.length-1?' style="border-bottom:none;"':''}>
+              <div class="rwh-icon" style="background:${meta.bg};color:${meta.color};">${meta.icon}</div>
+              <div class="rwh-body">
+                <div class="rwh-title-row"><div class="rwh-title">${sanitize(t.sourceTitle || meta.label)}</div>${xpBadge}</div>
+                <div class="rwh-meta">${subParts.join(' · ')}</div>
               </div>
-              <div class="rw-txn-right">
-                <div class="rw-txn-amt ${t.coinsChange>=0?'rw-amt-pos':'rw-amt-neg'}">${t.coinsChange>=0?'+':''}${t.coinsChange} 🪙</div>
-                <div class="rw-txn-bal">${t.balanceAfter} bal</div>
+              <div class="rwh-right">
+                <div class="rwh-amt ${isPositive?'rwh-amt-pos':'rwh-amt-neg'}">${isPositive?'+':'−'}${Math.abs(coinsChange)} 🪙</div>
+                <div class="rwh-bal">Balance: ${(t.balanceAfter||0).toLocaleString()}</div>
               </div>
-            </div>`).join('')}
-          </div>`).join('');
+            </div>`;
+          }).join('');
+          return `<div class="ardm-date-group">
+            <div class="ardm-date-label">${date}</div>
+            <div class="rwh-card">${rows}</div>
+          </div>`;
+        }).join('');
       })();
 
   // ── MY REDEMPTIONS TAB ────────────────────────────
-  const RDST={ pending:{c:'#f59e0b',bg:'rgba(245,158,11,.1)'},approved:{c:'#22c55e',bg:'rgba(34,197,94,.1)'},rejected:{c:'#ef4444',bg:'rgba(239,68,68,.1)'},processing:{c:'#3b82f6',bg:'rgba(59,130,246,.1)'},delivered:{c:'#8b5cf6',bg:'rgba(139,92,246,.1)'},completed:{c:'#22c55e',bg:'rgba(34,197,94,.1)'} };
-  const mineTab = !myRdm.length
-    ? `<div class="rw-empty"><div style="font-size:48px;margin-bottom:12px;">🎁</div><div class="rw-empty-title">No redemptions yet</div><div class="rw-empty-sub">Visit the Store and redeem coins for rewards</div></div>`
-    : myRdm.sort((a,b)=>b.createdAt-a.createdAt).map(r=>{
-        const rw=(db.rewards||[]).find(x=>x.id===r.rewardId);
-        const cat=CATS[rw?.category]||CATS.physical;
-        const st=RDST[r.status]||RDST.pending;
-        return `<div class="rw-mine-row">
-          <div class="rw-mine-icon" style="background:${cat.bg};">${cat.emoji}</div>
-          <div class="rw-mine-body">
-            <div class="rw-mine-name">${sanitize(rw?.name||'Reward')}</div>
-            <div class="rw-mine-date">${new Date(r.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
-            ${r.adminNote?`<div class="rw-mine-note">"${sanitize(r.adminNote)}"</div>`:''}
-          </div>
-          <div class="rw-mine-right">
-            <span class="rw-mine-status" style="background:${st.bg};color:${st.c};">${r.status.charAt(0).toUpperCase()+r.status.slice(1)}</span>
-            <div class="rw-mine-cost">🪙 ${r.coinsCost}</div>
-          </div>
-        </div>`;
-      }).join('');
+  const RDST={ pending:{l:'Pending',c:'#f59e0b',bg:'rgba(245,158,11,.1)'},approved:{l:'Approved',c:'#22c55e',bg:'rgba(34,197,94,.1)'},rejected:{l:'Rejected',c:'#ef4444',bg:'rgba(239,68,68,.1)'},processing:{l:'Processing',c:'#3b82f6',bg:'rgba(59,130,246,.1)'},delivered:{l:'Delivered',c:'#8b5cf6',bg:'rgba(139,92,246,.1)'},completed:{l:'Completed',c:'#22c55e',bg:'rgba(34,197,94,.1)'} };
+  const rdmStatusFilter = window.internRdmStatus || 'all';
+  const myRdmForMineTab = rdmStatusFilter === 'all' ? myRdm : myRdm.filter(r => r.status === rdmStatusFilter);
+  const mineFilterPills = `<div class="arwm-cats" style="padding:0 0 14px;">
+    ${['all','pending','approved','delivered','rejected'].map(s=>{
+      const on=(window.internRdmStatus||'all')===s;
+      const label=s==='all'?'All':s.charAt(0).toUpperCase()+s.slice(1);
+      return `<button class="arwm-cat-pill${on?' arwm-cat-on':''}" onclick="window.internRdmStatus='${s}';renderInternRewards(document.getElementById('contentArea'))">${label}</button>`;
+    }).join('')}
+  </div>`;
+  const mineTab = mineFilterPills + (!myRdmForMineTab.length
+    ? `<div class="rw-empty"><div style="font-size:48px;margin-bottom:12px;">🎁</div><div class="rw-empty-title">No redemptions${rdmStatusFilter!=='all'?' with this status':' yet'}</div><div class="rw-empty-sub">Visit the Store and redeem coins for rewards</div></div>`
+    : (() => {
+        const sorted = myRdmForMineTab.slice().sort((a,b)=>b.createdAt-a.createdAt);
+        const groups = {};
+        sorted.forEach(r => {
+          const d = new Date(r.createdAt);
+          const key = d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(r);
+        });
+        return Object.entries(groups).map(([dateLabel, rdms]) => {
+          const cards = rdms.map(r => {
+            const rw=(db.rewards||[]).find(x=>x.id===r.rewardId);
+            const cat=CATS[rw?.category]||CATS.physical;
+            const st=RDST[r.status]||RDST.pending;
+            const thumb = rw?.imageSquare||rw?.imageData
+              ? `<img src="${rw.imageSquare||rw.imageData}" class="arwm-img">`
+              : `<div class="arwm-img arwm-img-emoji" style="background:${cat.bg};color:${cat.color};">${cat.emoji}</div>`;
+            return `<div class="arwm-row" style="align-items:center;border-bottom:1px solid var(--border);">
+              ${thumb}
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                  <div class="arwm-row-name" style="flex:1;min-width:0;">${sanitize(rw?.name||'Reward')}</div>
+                  <span class="arwm-status-tag" style="background:${st.bg};color:${st.c};flex-shrink:0;">${st.l}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap;">
+                  <span class="arwm-tag" style="background:${cat.bg};color:${cat.color};">${cat.label}</span>
+                  <span class="arwm-row-coins">${(r.coinsCost||0).toLocaleString()} Coins</span>
+                </div>
+                ${r.adminNote?`<div class="rw-mine-note" style="margin-top:6px;">"${sanitize(r.adminNote)}"</div>`:''}
+              </div>
+            </div>`;
+          }).join('');
+          return `<div class="ardm-date-group">
+            <div class="ardm-date-label">${dateLabel}</div>
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">${cards}</div>
+          </div>`;
+        }).join('');
+      })());
+
+  const tabBody = tab === 'wallet' ? walletTab : tab === 'mine' ? mineTab : tab === 'history' ? histTab : storeTab;
+  const tabTitle = tab === 'wallet' ? 'My Wallet' : tab === 'mine' ? 'Redeemed Rewards' : tab === 'history' ? 'Transaction History' : 'Reward Store';
+  const isSubTab = tab !== 'store';
 
   ca.innerHTML = `
     <div class="rws-page-header">
-      <button class="rws-back-btn" onclick="navigateTo('internDashboard')">
+      <button class="rws-back-btn" onclick="${tab === 'history' ? "navigateTo('internDashboard')" : isSubTab ? "window.rwTab='store';renderInternRewards(document.getElementById('contentArea'))" : "navigateTo('internDashboard')"}">
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
       </button>
-      <span class="rws-page-title">Reward Store</span>
-      <div style="width:36px;"></div>
+      <span class="rws-page-title">${tabTitle}</span>
+      ${isSubTab ? `<div style="width:36px;"></div>` : `
+      <div style="position:relative;">
+        <button class="arw-dots-btn" onclick="irwToggleMenu()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+        </button>
+        <div class="arw-dropdown" id="irwDropdown" style="display:none;">
+          <button class="arw-dd-item" onclick="irwToggleMenu();window.rwTab='mine';renderInternRewards(document.getElementById('contentArea'))"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> Redeemed</button>
+          <button class="arw-dd-item" onclick="irwToggleMenu();window.rwTab='wallet';renderInternRewards(document.getElementById('contentArea'))"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Wallet</button>
+        </div>
+      </div>`}
     </div>
-    <div class="rw-body" style="padding:14px 14px 32px;">${storeTab}</div>`;
+    <div class="rw-body" style="padding:14px 14px 32px;">${tabBody}</div>`;
   // Force-hide footer and fab on this page
   const _nav = document.getElementById('mobBottomNav');
   const _fab = document.getElementById('mobFab');
@@ -11875,70 +11438,17 @@ function renderInternRewards(ca) {
   if(window.lucide)lucide.createIcons();
 }
 
-// ── Reward Detail Sheet ──────────────────────────────────
-function rwOpenDetail(rewardId) {
-  const r=(db.rewards||[]).find(x=>x.id===rewardId); if(!r)return;
-  const wallet=_getWallet(currentUser.id);
-  const afford=wallet.balance>=r.coinCost;
-  const oos=r.stock!==null&&r.stock!==undefined&&parseInt(r.stock)<=0;
-  const CATS={physical:{label:'Physical',emoji:'📦',color:'#3b82f6',bg:'rgba(59,130,246,.12)'},digital:{label:'Digital',emoji:'💻',color:'#8b5cf6',bg:'rgba(139,92,246,.12)'},giftcard:{label:'Gift Card',emoji:'🎁',color:'#22c55e',bg:'rgba(34,197,94,.12)'},perk:{label:'Perk',emoji:'⚡',color:'#f59e0b',bg:'rgba(245,158,11,.12)'},experience:{label:'Experience',emoji:'🌟',color:'#e85d26',bg:'rgba(232,93,38,.12)'}};
-  const cat=CATS[r.category]||CATS.physical;
-  document.getElementById('rwDetailSheet')?.remove();
-  const sh=document.createElement('div'); sh.id='rwDetailSheet';
-  sh.innerHTML=`
-  <div class="tc-backdrop" onclick="document.getElementById('rwDetailSheet')?.remove()"></div>
-  <div class="tc-sheet" id="rwDtInner" style="max-height:90vh;overflow-y:auto;padding:0;">
-    <div class="tc-handle" style="margin:10px auto 0;"></div>
-    ${r.imageData?`<img src="${r.imageData}" style="width:100%;height:190px;object-fit:cover;display:block;">`:''}
-    <div style="padding:20px 18px 36px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-        <span style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;background:${cat.bg};color:${cat.color};">${cat.emoji} ${cat.label}</span>
-        ${r.approvalRequired?'<span style="font-size:11px;font-weight:600;color:var(--text3);background:var(--surface2);padding:4px 10px;border-radius:20px;">Needs Approval</span>':''}
-      </div>
-      <div style="font-size:21px;font-weight:800;color:var(--text);font-family:\'Outfit\',sans-serif;margin-bottom:6px;">${sanitize(r.name)}</div>
-      <div style="font-size:14px;color:var(--text2);line-height:1.65;margin-bottom:20px;">${sanitize(r.description||'')}</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:var(--surface2);border-radius:14px;margin-bottom:${r.stock!==null&&r.stock!==undefined?'10px':'20px'};">
-        <div>
-          <div style="font-size:11px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Cost</div>
-          <div style="font-size:26px;font-weight:900;color:${afford?'#f59e0b':'#ef4444'};font-family:\'Outfit\',sans-serif;">🪙 ${r.coinCost.toLocaleString()}</div>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-size:11px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Your Balance</div>
-          <div style="font-size:18px;font-weight:800;color:var(--text);font-family:\'Outfit\',sans-serif;">🪙 ${wallet.balance.toLocaleString()}</div>
-        </div>
-      </div>
-      ${r.stock!==null&&r.stock!==undefined?`<div style="font-size:12px;color:var(--text3);margin-bottom:20px;padding:0 2px;">📦 ${parseInt(r.stock)} left in stock</div>`:''}
-      <button style="width:100%;padding:15px;border-radius:14px;border:none;font-size:15px;font-weight:700;cursor:pointer;font-family:\'Outfit\',sans-serif;background:${(!afford||oos)?'#d1d5db':'linear-gradient(135deg,#f59e0b,#d97706)'};color:${(!afford||oos)?'#9ca3af':'#fff'};" ${(!afford||oos)?'disabled':''} onclick="rwConfirmRedeem('${r.id}')">
-        ${oos?'Out of Stock':(!afford?'🔒 Need '+(r.coinCost-wallet.balance)+' more coins':'🛍️ Redeem Now')}
-      </button>
-    </div>
-  </div>`;
-  document.body.appendChild(sh);
-  requestAnimationFrame(()=>sh.querySelector('#rwDtInner').classList.add('tc-sheet-open'));
-}
-
-async function rwConfirmRedeem(rewardId) {
-  const r=(db.rewards||[]).find(x=>x.id===rewardId); if(!r)return;
-  const w=_getWallet(currentUser.id);
-  if(w.balance<r.coinCost){showToast('❌ Not enough coins');return;}
-  const stk=r.stock===null||r.stock===undefined?null:parseInt(r.stock);
-  if(stk!==null&&stk<=0){showToast('❌ Out of stock');return;}
-  document.getElementById('rwDetailSheet')?.remove();
-  w.balance-=r.coinCost; w.totalSpent+=r.coinCost;
-  w.transactions.unshift({id:'txn-'+Date.now(),type:'spent',source:'redemption',sourceId:rewardId,sourceTitle:r.name,xpEarned:0,conversionRate:0,coinsChange:-r.coinCost,balanceAfter:w.balance,timestamp:Date.now()});
-  if(stk!==null){const rw=(db.rewards||[]).find(x=>x.id===rewardId);if(rw)rw.stock=stk-1;}
-  const rdm={id:'rdm-'+Date.now(),rewardId,internId:currentUser.id,coinsCost:r.coinCost,status:r.approvalRequired?'pending':'approved',createdAt:Date.now(),updatedAt:Date.now(),adminNote:''};
-  if(!db.redemptions)db.redemptions=[];
-  db.redemptions.unshift(rdm);
-  try {
-    await Promise.all([saveWallet(currentUser.id),fbPut('redemptions',db.redemptions),fbPut('rewards',db.rewards)]);
-    showToast(r.approvalRequired?'⏳ Sent! Awaiting admin approval':'🎉 Redeemed! Check Mine tab');
-    window.rwTab='mine'; renderInternRewards(document.getElementById('contentArea'));
-  } catch(e) {
-    w.balance+=r.coinCost; w.totalSpent-=r.coinCost; w.transactions.shift(); db.redemptions.shift();
-    showToast('❌ Redemption failed. Try again.');
-  }
-}
+// BUG FIX: this file used to declare `function rwOpenDetail(rewardId)` twice at the
+// top level — a small modal-sheet version here, and a full "Reward Details" page
+// version further down (search rwOpenDetail). In plain JS the second declaration
+// silently overwrites the first, so this modal-sheet version (and the correctly-shaped
+// rwConfirmRedeem() transaction it called) was 100% dead code — every real click always
+// ran the full-page version further down, whose redeem button called rwRedeemNow().
+// rwRedeemNow() wrote transactions in an incompatible shape (amount/label/createdAt
+// instead of coinsChange/balanceAfter/timestamp/source/sourceTitle), which is why
+// Transaction History showed every redemption as a garbled "Coin Activity, +0 🪙,
+// Balance: 0" row under a broken date. Removed the dead duplicate below and fixed
+// rwRedeemNow() (and the admin rwDoAwardCoins()) to write the correct transaction shape.
 
 
 // ╔══════════════════════════════════════════════════╗
@@ -12110,25 +11620,6 @@ function renderAdminDashboard(ca) {
   const tsTotal = tsDone + tsPending + tsReview + tsOverdue || 1;
   const tsMax   = Math.max(tsDone + tsPending + tsReview + tsOverdue, tsDone, tsPending, tsReview, tsOverdue, 1);
 
-  // ── Docs real counts ─────────────────────────────────────
-  const docsComplaints = (db.complaints || []).length;
-  const docsRequests   = (db.pendingRequests || []).length;
-  const docsAnnounce   = (db.announcements || []).length;
-  const docsNotifs     = (db.adminNotifications || []).length;
-  const docsTotal      = docsComplaints + docsRequests + docsAnnounce + docsNotifs || 1;
-  const C = 502.4; // 2π×80
-  let off = 0;
-  const seg = (n) => {
-    const d = (n / docsTotal) * C;
-    const o = off;
-    off += d;
-    return { d, o };
-  };
-  const sReq = seg(docsRequests);
-  const sAnn = seg(docsAnnounce);
-  const sCmp = seg(docsComplaints);
-  const sNtf = seg(docsNotifs);
-
   if (isSpecificIntern && selectedIntern) {
     // ── Per-intern calendar view ─────────────────────────────
     const internAttendance = getInternMonthAttendance(selectedIntern.id, state.date);
@@ -12179,7 +11670,6 @@ function renderAdminDashboard(ca) {
       </div>`;
   } else {
     // ── Main admin dashboard ─────────────────────────────────
-    const unreadNotifCount = (db.adminNotifications || []).filter(n => !n.read).length;
     const _hr = new Date().getHours();
     const greetingWord = _hr < 12 ? 'Good Morning' : _hr < 17 ? 'Good Afternoon' : 'Good Evening';
     const adminAvatarImg = buildAvatarImg(getAvatarConfig(currentUser.id), 40);
@@ -12210,7 +11700,7 @@ function renderAdminDashboard(ca) {
             <div class="adh-header-actions">
               <button class="adh-bell-btn" onclick="handleNotifClick()" aria-label="Notifications">
                 <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                ${unreadNotifCount > 0 ? `<span class="adh-bell-badge">${unreadNotifCount > 99 ? '99+' : unreadNotifCount}</span>` : ''}
+                <span class="dm-envelope-badge" id="adhNotifBadge" style="display:none;"></span>
               </button>
               <div class="adh-avatar" onclick="openProfileInfoPopup()" title="View Profile">${adminAvatarImg}</div>
             </div>
@@ -12422,30 +11912,6 @@ function renderAdminDashboard(ca) {
                 </div>
                 <div class="adm-view-more-row">
                   <button class="view-more-btn" onclick="openAttendanceDetailPage()">View More <i data-lucide="arrow-right" style="width:15px;height:15px;margin-left:4px;"></i></button>
-                </div>
-              </div>
-            </div>`);
-          // Docs Overview
-          if (tk.docsOverview !== false) slides.push(`
-            <div class="adm-carousel-slide">
-              <div class="docs-overview-section" style="margin:0;">
-                <h3 class="docs-overview-title">Docs Overview</h3>
-                <div class="docs-chart-container">
-                  <svg class="docs-donut-chart" viewBox="0 0 200 200">
-                    <circle cx="100" cy="100" r="80" fill="none" stroke="var(--border)" stroke-width="24"/>
-                    <circle cx="100" cy="100" r="80" fill="none" stroke="#e85d26" stroke-width="24" stroke-dasharray="${sReq.d.toFixed(1)} ${C}" stroke-dashoffset="${(-sReq.o).toFixed(1)}" transform="rotate(-90 100 100)" stroke-linecap="round"/>
-                    <circle cx="100" cy="100" r="80" fill="none" stroke="#ff8c5a" stroke-width="24" stroke-dasharray="${sAnn.d.toFixed(1)} ${C}" stroke-dashoffset="${(-sAnn.o).toFixed(1)}" transform="rotate(-90 100 100)" stroke-linecap="round"/>
-                    <circle cx="100" cy="100" r="80" fill="none" stroke="#ffd93d" stroke-width="24" stroke-dasharray="${sCmp.d.toFixed(1)} ${C}" stroke-dashoffset="${(-sCmp.o).toFixed(1)}" transform="rotate(-90 100 100)" stroke-linecap="round"/>
-                    <circle cx="100" cy="100" r="80" fill="none" stroke="#9ca3af" stroke-width="24" stroke-dasharray="${sNtf.d.toFixed(1)} ${C}" stroke-dashoffset="${(-sNtf.o).toFixed(1)}" transform="rotate(-90 100 100)" stroke-linecap="round"/>
-                    <text x="100" y="95" text-anchor="middle" font-size="36" font-weight="800" fill="var(--text)">${docsComplaints+docsRequests+docsAnnounce+docsNotifs}</text>
-                    <text x="100" y="115" text-anchor="middle" font-size="13" font-weight="600" fill="var(--text2)">Total Docs</text>
-                  </svg>
-                </div>
-                <div class="docs-type-list">
-                  <div class="docs-type-item" onclick="openDocsList('requests')"><div class="docs-type-left"><div class="docs-type-indicator" style="background:#e85d26;"></div><div class="docs-type-label">Requests</div></div><div class="docs-type-right"><div class="docs-type-count">${docsRequests}</div><i data-lucide="chevron-right" style="width:18px;height:18px;color:var(--text3);"></i></div></div>
-                  <div class="docs-type-item" onclick="openDocsList('announcements')"><div class="docs-type-left"><div class="docs-type-indicator" style="background:#ff8c5a;"></div><div class="docs-type-label">Announcements</div></div><div class="docs-type-right"><div class="docs-type-count">${docsAnnounce}</div><i data-lucide="chevron-right" style="width:18px;height:18px;color:var(--text3);"></i></div></div>
-                  <div class="docs-type-item" onclick="openDocsList('complaints')"><div class="docs-type-left"><div class="docs-type-indicator" style="background:#ffd93d;"></div><div class="docs-type-label">Complaints</div></div><div class="docs-type-right"><div class="docs-type-count">${docsComplaints}</div><i data-lucide="chevron-right" style="width:18px;height:18px;color:var(--text3);"></i></div></div>
-                  <div class="docs-type-item"><div class="docs-type-left"><div class="docs-type-indicator" style="background:#9ca3af;"></div><div class="docs-type-label">Notifications</div></div><div class="docs-type-right"><div class="docs-type-count">${docsNotifs}</div><i data-lucide="chevron-right" style="width:18px;height:18px;color:var(--text3);"></i></div></div>
                 </div>
               </div>
             </div>`);
@@ -13236,287 +12702,6 @@ function viewInternProfile(internId) {
   navigateTo('internProfile');
 }
 
-// Open docs list page
-function openDocsList(type) {
-  window.currentDocsType = type;
-  navigateTo('docsList');
-}
-
-// Open doc detail page
-function openDocDetail(docId) {
-  window.currentDocId = docId;
-  navigateTo('docDetail');
-}
-
-// Render docs list page
-function renderDocsListPage(container) {
-  const type = window.currentDocsType || 'requests';
-  
-  const typeConfig = {
-    requests: { title: 'Requests', icon: 'file-text', color: '#e5e7eb' },
-    inquiries: { title: 'Inquiries', icon: 'help-circle', color: '#ffb4a2' },
-    complaints: { title: 'Complaints', icon: 'alert-circle', color: '#ffd93d' },
-    weekly: { title: 'Weekly Reports', icon: 'calendar', color: '#ffcccb' },
-    monthly: { title: 'Monthly Reports', icon: 'calendar-days', color: '#ffd700' }
-  };
-  
-  const config = typeConfig[type];
-  
-  // Mock data - replace with real data
-  const docs = generateMockDocs(type);
-  
-  container.innerHTML = `
-    <div class="docs-list-page">
-      <!-- Header -->
-      <div class="docs-list-header">
-        <button class="admin-back-btn" onclick="navigateTo('adminDashboard')">
-          <i data-lucide="arrow-left" style="width: 22px; height: 22px;"></i>
-        </button>
-        <h2 class="docs-list-title">${config.title}</h2>
-        <button class="docs-search-btn">
-          <i data-lucide="search" style="width: 20px; height: 20px;"></i>
-        </button>
-      </div>
-      
-      <!-- Docs List -->
-      <div class="docs-list-container">
-        ${docs.map(doc => `
-          <div class="doc-item" onclick="openDocDetail('${doc.id}')">
-            <div class="doc-item-left">
-              <div class="doc-item-icon" style="background: ${getDocStatusColor(doc.status).bg}; color: ${getDocStatusColor(doc.status).color};">
-                <i data-lucide="${getDocIcon(doc.type)}" style="width: 20px; height: 20px;"></i>
-              </div>
-              <div class="doc-item-info">
-                <div class="doc-item-title">${sanitize(doc.title)}</div>
-                <div class="doc-item-id">${doc.id}</div>
-              </div>
-            </div>
-            <i data-lucide="chevron-right" style="width: 18px; height: 18px; color: var(--text3);"></i>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-  
-  if (window.lucide) lucide.createIcons();
-}
-
-// Render doc detail page
-function renderDocDetailPage(container) {
-  const docId = window.currentDocId || 'OQ-4209';
-  const doc = getMockDocDetail(docId);
-  
-  container.innerHTML = `
-    <div class="doc-detail-page">
-      <!-- Header -->
-      <div class="doc-detail-header">
-        <button class="admin-back-btn" onclick="navigateTo('docsList')">
-          <i data-lucide="arrow-left" style="width: 22px; height: 22px;"></i>
-        </button>
-        <h2 class="doc-detail-id">${doc.id}</h2>
-        <div class="doc-detail-actions">
-          <button class="doc-action-btn">
-            <i data-lucide="eye" style="width: 20px; height: 20px;"></i>
-          </button>
-          <button class="doc-action-btn">
-            <i data-lucide="paperclip" style="width: 20px; height: 20px;"></i>
-          </button>
-          <button class="doc-action-btn">
-            <i data-lucide="more-vertical" style="width: 20px; height: 20px;"></i>
-          </button>
-        </div>
-      </div>
-      
-      <!-- Content -->
-      <div class="doc-detail-content">
-        <!-- Title and Status -->
-        <div class="doc-detail-title-section">
-          <div class="doc-assignee-avatar" style="background: #4fc3f7;">
-            <span>NA</span>
-          </div>
-          <h1 class="doc-detail-title">${sanitize(doc.title)}</h1>
-        </div>
-        
-        <!-- Status Dropdown -->
-        <div class="doc-status-dropdown">
-          <button class="status-dropdown-btn">
-            <span>To Do</span>
-            <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
-          </button>
-        </div>
-        
-        <!-- Collapsible Sections -->
-        <div class="doc-sections">
-          <!-- General Section -->
-          <div class="doc-section">
-            <button class="doc-section-header" onclick="toggleDocSection(this)">
-              <span class="doc-section-title">General</span>
-              <i data-lucide="chevron-down" style="width: 18px; height: 18px;"></i>
-            </button>
-            <div class="doc-section-content">
-              <div class="doc-section-text">Description and Environment</div>
-              <div class="doc-field">
-                <div class="doc-field-label">Description</div>
-                <div class="doc-field-value">${sanitize(doc.description)}</div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Parent Work Item Section -->
-          <div class="doc-section">
-            <button class="doc-section-header" onclick="toggleDocSection(this)">
-              <span class="doc-section-title">Parent work item</span>
-              <i data-lucide="chevron-down" style="width: 18px; height: 18px;"></i>
-            </button>
-            <div class="doc-section-content" style="display: none;">
-              <div class="doc-field-value">None</div>
-            </div>
-          </div>
-          
-          <!-- Details Section -->
-          <div class="doc-section">
-            <button class="doc-section-header" onclick="toggleDocSection(this)">
-              <span class="doc-section-title">Details</span>
-              <i data-lucide="chevron-down" style="width: 18px; height: 18px;"></i>
-            </button>
-            <div class="doc-section-content" style="display: none;">
-              <div class="doc-section-text">Issue Type, Assignee, Reporter, Labels, and Fix versions</div>
-            </div>
-          </div>
-          
-          <!-- More Fields Section -->
-          <div class="doc-section">
-            <button class="doc-section-header" onclick="toggleDocSection(this)">
-              <span class="doc-section-title">More fields</span>
-              <i data-lucide="chevron-down" style="width: 18px; height: 18px;"></i>
-            </button>
-            <div class="doc-section-content" style="display: none;">
-              <div class="doc-section-text">Original estimate, Time tracking, Components, Sprint, a...</div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Comments Section -->
-        <div class="doc-comments-section">
-          <div class="doc-comments-header">
-            <button class="comments-sort-btn">
-              <span>Comments</span>
-              <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
-            </button>
-            <button class="comments-sort-btn">
-              <span>Newest first</span>
-              <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
-            </button>
-          </div>
-          
-          <!-- Comment Item -->
-          <div class="doc-comment-item">
-            <div class="comment-avatar">
-              <img src="https://via.placeholder.com/40" alt="User" style="width: 100%; height: 100%; border-radius: 50%;">
-            </div>
-            <div class="comment-content">
-              <div class="comment-header">
-                <span class="comment-author">adeel.ahmed</span>
-                <span class="comment-time">3w</span>
-                <button class="comment-menu-btn">
-                  <i data-lucide="more-vertical" style="width: 16px; height: 16px;"></i>
-                </button>
-              </div>
-              <div class="comment-text">
-                <span class="comment-mention">@Najid Ahmed Awan</span> update on this?
-              </div>
-              <div class="comment-actions">
-                <button class="comment-action-btn">Suggest a reply...</button>
-                <button class="comment-action-btn">Status update...</button>
-                <button class="comment-action-btn">Thank</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Add Comment Box -->
-        <div class="doc-add-comment">
-          <input type="text" class="add-comment-input" placeholder="Add a comment..." />
-        </div>
-        
-        <div style="height: 80px;"></div>
-      </div>
-    </div>
-  `;
-  
-  if (window.lucide) lucide.createIcons();
-}
-
-// Toggle doc section
-function toggleDocSection(button) {
-  const section = button.parentElement;
-  const content = section.querySelector('.doc-section-content');
-  const icon = button.querySelector('[data-lucide="chevron-down"]');
-  
-  if (content.style.display === 'none') {
-    content.style.display = 'block';
-    icon.style.transform = 'rotate(180deg)';
-  } else {
-    content.style.display = 'none';
-    icon.style.transform = 'rotate(0deg)';
-  }
-}
-
-// Helper functions
-function getDocIcon(type) {
-  const icons = {
-    'request': 'file-text',
-    'inquiry': 'help-circle',
-    'complaint': 'alert-circle',
-    'bug': 'bug',
-    'task': 'check-square',
-    'story': 'book-open'
-  };
-  return icons[type] || 'file-text';
-}
-
-function getDocStatusColor(status) {
-  const colors = {
-    'todo': { color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)' },
-    'in-progress': { color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)' },
-    'done': { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.15)' },
-    'blocked': { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' }
-  };
-  return colors[status] || colors.todo;
-}
-
-function generateMockDocs(type) {
-  const docs = [
-    { id: 'OQ-4247', title: 'Feature Request', type: 'request', status: 'todo' },
-    { id: 'OQ-4246', title: 'Automation id for Post Ordering', type: 'task', status: 'in-progress' },
-    { id: 'OQ-4245', title: 'Automation id for Checkout', type: 'task', status: 'done' },
-    { id: 'OQ-4209', title: '3PO: Visibility settings issues on kitchenhub', type: 'bug', status: 'todo' },
-    { id: 'OQ-4207', title: 'Create loyalty slice for Redux', type: 'task', status: 'in-progress' },
-    { id: 'OQ-4206', title: 'Add Rewards Data to menu cache', type: 'task', status: 'todo' },
-    { id: 'OQ-4194', title: 'Item Out-of-Stock banner does not appear on...', type: 'bug', status: 'blocked' },
-    { id: 'OQ-4188', title: 'Testcases Checkout with Scheduled Orders', type: 'task', status: 'done' },
-    { id: 'OQ-4185', title: 'When you do refund an Online order, there sh...', type: 'story', status: 'done' },
-    { id: 'OQ-4184', title: 'When you initiate refund on an Online Order, a...', type: 'story', status: 'done' },
-    { id: 'OQ-4178', title: 'Out-of-stock or unavailable item implementat...', type: 'bug', status: 'todo' }
-  ];
-  
-  return docs;
-}
-
-function getMockDocDetail(docId) {
-  return {
-    id: docId,
-    title: '3PO: Visibility settings issues on kitchenhub',
-    type: 'bug',
-    status: 'todo',
-    description: 'The visibility settings for 3PO are not working correctly on the kitchenhub interface. Items that should be hidden are still visible to users.',
-    assignee: { name: 'Not Assigned', avatar: 'NA' },
-    reporter: { name: 'Adeel Ahmed', avatar: 'AA' },
-    priority: 'Medium',
-    createdDate: '2026-03-28',
-    updatedDate: '2026-04-18'
-  };
-}
 
 // Open attendance date picker
 function openAttendanceDatePicker() {
@@ -14118,6 +13303,10 @@ async function completeHabit(habitId, internId, btn) {
     }
   } catch(e) { console.warn('Habit sync error', e); }
   showToast(coinsEarned > 0 ? `Habit complete! +${xp} XP · +${coinsEarned} coin${coinsEarned!==1?'s':''}` : `Habit complete! +${xp} XP`, 'success');
+  if (currentRole === 'intern') {
+    const internName = INTERNS.find(i => i.id === internId)?.name || currentUser?.name || 'Intern';
+    pushAdminNotif({ type:'habit_completed', title:'Habit Completed', body:`${internName} completed "${habit.name}"`, internId });
+  }
   // Refresh whatever's actually showing this habit right now.
   if (currentPage === 'internTasks') {
     // Habits live inside the Tasks tab's swipeable pane — refresh the
@@ -15118,23 +14307,14 @@ async function saveHabit() {
 
   if (!db.habits) db.habits = [];
   db.habits.unshift(habit);
-  // Notify interns
-  selectedIds.forEach(iid => {
-    if (!db.notifications[iid]) db.notifications[iid] = [];
-    db.notifications[iid].unshift({ id:'n-'+Date.now()+'-'+iid, msg:`New habit assigned: "${name}"`, type:'habit', read:false, date:_hToday() });
-  });
+  selectedIds.forEach(iid => pushInternNotif(iid, { type:'habit_assigned', title:'New Habit Assigned', body: name }));
   closeCreateHabit();
   // BUG FIX: Use targeted fbPatch instead of full fbWrite (saveDB) to avoid
   // overwriting habitCompletions that were written with fbPatch independently.
   try {
     showLoading('Saving...');
-    // Patch only the habits array and notifications — never overwrite completions
+    // Patch only the habits array — never overwrite completions
     await fbPatch('habits', db.habits.reduce((acc, h, i) => { acc[i] = h; return acc; }, {}));
-    selectedIds.forEach(async iid => {
-      if (db.notifications[iid]) {
-        try { await fbPatch(`notifications/${iid}`, db.notifications[iid].reduce((acc, n, i) => { acc[i] = n; return acc; }, {})); } catch(e){}
-      }
-    });
     // Also do full save to keep habits array in sync (habits array is index-based)
     await fbPatch('habits', db.habits);
     hideLoading();
@@ -15847,8 +15027,7 @@ async function saveEditTask(tid) {
   task.approvalRequired = document.getElementById('etApproval').checked;
   task.approvalContribId = _approvalContribId;
   if (newAssignedTo !== oldAssignedTo) {
-    if (!db.notifications[newAssignedTo]) db.notifications[newAssignedTo] = [];
-    db.notifications[newAssignedTo].unshift({id:'n-'+Date.now(), msg:`Task updated and assigned to you: "${title}"`, type:'task', read:false, date:today()});
+    pushInternNotif(newAssignedTo, { type:'task_assigned', title:'Task Assigned to You', body: title });
   }
   closeModal(); _approvalContribId = null;
   await saveAndRefresh('Task updated!', 'adminTasks');
@@ -16332,97 +15511,12 @@ async function saveTask() {
   const ts = Date.now();
   const task = { ...baseData, id: 't-' + ts, assignedTo: selectedIds[0], sharedWith: selectedIds };
   db.tasks.unshift(task);
-  selectedIds.forEach(assignedTo => {
-    if (!db.notifications[assignedTo]) db.notifications[assignedTo] = [];
-    db.notifications[assignedTo].unshift({id:'n-'+Date.now()+'-'+assignedTo, msg:`New task assigned: "${title}"`, type:'task', read:false, date:today()});
-  });
+  selectedIds.forEach(iid => pushInternNotif(iid, { type:'task_assigned', title:'New Task Assigned', body: title }));
   closeCt(); _approvalContribId = null; _repeatConfig = null;
   window._ctChecklistItems = []; window._ctAttachName = null; window._ctSymbol = null;
   await saveAndRefresh(`Task shared with ${selectedIds.length} intern(s)!`, 'adminTasks');
 }
 
-// ╔══════════════════════════════════════════════════╗
-// ║   ADMIN ALERTS — tabbed (req 7): Approvals / Complaints / Task Alerts
-// ╚══════════════════════════════════════════════════╝
-function renderAdminNotifs(ca) {
-  const notifs = db.adminNotifications || [];
-  const requests = (db.pendingRequests || []).filter(r => r.status === 'pending');
-  const hadUnread = notifs.some(n => !n.isRequest && !n.read);
-  notifs.forEach(n => { if (!n.isRequest) n.read = true; });
-  if (hadUnread) saveDB();
-  updateBadges();
-
-  const taskNotifs = notifs.filter(n => !n.isRequest);
-
-  const notifCard = n => `<div class="notif-item">
-    <div class="notif-item-icon" style="background:rgba(39,174,96,.1);">${{task:'✅',repeat:'🔁',entry:'📊',request:'📨',announcement:'📢'}[n.type]||'🔔'}</div>
-    <div class="notif-item-body"><div class="notif-item-msg">${sanitize(n.msg)}</div><div class="notif-item-date">${sanitize(n.date||'')}</div></div>
-  </div>`;
-
-  const approvalsHTML = requests.length === 0
-    ? `<div class="txp-empty">No pending approvals.</div>`
-    : requests.map(r => {
-        const intern = INTERNS.find(i => i.id === r.internId);
-        const typeLabel = r.type==='entry' ? `Entry: ${sanitize(r.category||'')}` : `Task: "${sanitize(r.taskTitle||'')}"`;
-        return `<div class="complaint-card" style="border-left:4px solid var(--accent);">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-            <div style="width:36px;height:36px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0;">${sanitize(intern?.name?.[0]||'?')}</div>
-            <div style="flex:1;"><div style="font-weight:700;font-size:13px;">📨 ${sanitize(intern?.name||'Unknown')}</div><div style="font-size:12px;color:var(--text2);">${typeLabel}</div>${r.note ? `<div style="font-size:11px;color:var(--text3);">"${sanitize(r.note)}"</div>` : ''}</div>
-            <div style="font-size:11px;color:var(--text3);">${sanitize(r.date||'')}</div>
-          </div>
-          <div style="display:flex;gap:7px;">
-            <button class="btn btn-success btn-sm" onclick="approveRequest('${r.id}')">✅ Approve</button>
-            <button class="btn btn-danger btn-sm" onclick="denyRequest('${r.id}')">❌ Deny</button>
-          </div>
-        </div>`;
-      }).join('');
-
-  const complaintsHTML = (db.complaints||[]).length === 0
-    ? `<div class="txp-empty">No complaints yet.</div>`
-    : (db.complaints||[]).slice(0,20).map(c => {
-        const from = INTERNS.find(i=>i.id===c.from); const against = INTERNS.find(i=>i.id===c.against);
-        return `<div class="complaint-card" style="${c.done?'opacity:.6;':''}">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <div style="font-weight:700;font-size:13px;">${sanitize(c.subject)}</div>
-            ${c.done ? '<span class="badge badge-green">✓ Resolved</span>' : `<button class="btn btn-success btn-sm" onclick="markComplaintDone('${c.id}')">✓ Done</button>`}
-          </div>
-          <div style="font-size:12px;color:var(--text2);">${sanitize(from?.name||'?')} → ${sanitize(against?.name||'?')} · ${sanitize(c.date||'')}</div>
-        </div>`;
-      }).join('');
-
-  const alertsHTML = taskNotifs.length === 0
-    ? `<div class="txp-empty">No task alerts yet.</div>`
-    : taskNotifs.map(notifCard).join('') + `<div style="margin-top:10px;"><button class="btn btn-danger btn-sm" onclick="clearAdminNotifs()">Clear Alerts</button></div>`;
-
-  const filterVal = window.adminNotifFilter || 'Entries';
-  let content = '';
-  if (filterVal === 'Entries') {
-    content = approvalsHTML;
-  } else if (filterVal === 'Complaints') {
-    content = complaintsHTML;
-  } else {
-    content = alertsHTML;
-  }
-
-  ca.innerHTML = `<div class="it-page">
-    <div class="txp-list" style="padding:12px 4px 0;">${content}</div>
-  </div>`;
-  _populateAdminNotifFilter();
-  if (window.lucide) lucide.createIcons(); initCarousels();
-}
-function setAdminNotifTab(tab) {
-  window.adminNotifTab = tab;
-  renderAdminNotifs(document.getElementById('contentArea'));
-}
-
-async function clearAdminNotifs() {
-  db.adminNotifications = db.adminNotifications.filter(n => n.isRequest);
-  await saveAndRefresh('Cleared', 'adminNotifs');
-}
-
-// ╔══════════════════════════════════════════════════╗
-// ║            ADMIN COMPLAINTS                      ║
-// ╚══════════════════════════════════════════════════╝
 // ╔══════════════════════════════════════════════════╗
 // ║               TOOLKIT                            ║
 // ╚══════════════════════════════════════════════════╝
@@ -16448,17 +15542,6 @@ const TOOLKIT_FEATURES = [
     what: 'Attendance lets admin track who is present, absent, or on leave every day. Interns can mark their own morning check-in via their home card.',
     how: ['Admin sees a daily summary (Present / Absent / Leave / Unmarked) in the dashboard carousel.', 'Tap the attendance card to drill into individual intern records.', 'Intern taps their home card to mark morning check-in and view their own record.'],
     video: '📅'
-  },
-  {
-    key: 'docsOverview',
-    name: 'Docs Overview',
-    sub: 'Document & request tracking',
-    color: '#f59e0b',
-    bg: 'rgba(245,158,11,.1)',
-    icon: `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
-    what: 'Docs Overview tracks all documents and requests in your training program — pending requests, announcements, complaints, and notifications in one place.',
-    how: ['Admin sees a donut chart breaking down doc types in the dashboard carousel.', 'Tap any doc type row to open the full list.', 'Intern sees a card on their home screen for quick access to their own requests and docs.'],
-    video: '📄'
   },
 ];
 
@@ -16571,7 +15654,7 @@ function renderToolkitFeatureDetail(ca, key) {
 }
 
 async function toggleToolkitFeature(key, enabled) {
-  if (!db.toolkit) db.toolkit = { statusBreakdown: true, attendance: true, docsOverview: true };
+  if (!db.toolkit) db.toolkit = { statusBreakdown: true, attendance: true };
   db.toolkit[key] = enabled;
   try {
     await fbPatch('toolkit', db.toolkit);
@@ -17108,6 +16191,23 @@ function arwToggleMenu(){
   }
 }
 
+function irwToggleMenu(){
+  const dd=document.getElementById('irwDropdown');
+  if(!dd) return;
+  const opening = dd.style.display==='none';
+  dd.style.display = opening ? 'flex' : 'none';
+  if(opening) {
+    setTimeout(()=>{
+      document.addEventListener('click', function _cl(e){
+        if(!e.target.closest('#irwDropdown') && !e.target.closest('.arw-dots-btn')) {
+          dd.style.display='none';
+        }
+        document.removeEventListener('click', _cl);
+      });
+    }, 150);
+  }
+}
+
 function arwmToggleMenu(id, e) {
   e.stopPropagation();
   const menu = document.getElementById('arwm-menu-'+id);
@@ -17632,6 +16732,9 @@ async function rwSaveReward(rewardId) {
   try {
     await fbPut('rewards', db.rewards);
     showToast(rewardId ? '✅ Updated' : '✅ Created');
+    if (!rewardId && active) {
+      pushInternNotifBroadcast(assignees, { type:'reward_created', title:'New Reward Available', body: name });
+    }
     window.adminRwTab = 'manage';
     renderAdminRewards(document.getElementById('contentArea'));
   } catch(e) { showToast('❌ Save failed: ' + e.message); }
@@ -17785,20 +16888,34 @@ async function rwRedeemNow(rewardId) {
   const pts=db.submissions[id]?.points||0;
   if(wallet.balance===0&&Math.floor(pts/rate)>0&&wallet.totalEarned===0){wallet.balance=Math.floor(pts/rate);wallet.totalEarned=wallet.balance;}
   if(wallet.balance<r.coinCost){showToast('⚠️ Not enough coins');return;}
+  const stk=r.stock===null||r.stock===undefined?null:parseInt(r.stock);
+  if(stk!==null&&stk<=0){showToast('❌ Out of stock');return;}
   wallet.balance-=r.coinCost; wallet.totalSpent=(wallet.totalSpent||0)+r.coinCost;
-  wallet.transactions.unshift({id:'txn-'+Date.now(),type:'redemption',amount:-r.coinCost,label:r.name,createdAt:Date.now()});
+  // BUG FIX: transaction shape now matches what Transaction History reads
+  // (coinsChange/balanceAfter/timestamp/source/sourceTitle) instead of the old
+  // amount/label/createdAt shape, which rendered as a garbled "+0 Coin Activity" row.
+  wallet.transactions.unshift({id:'txn-'+Date.now()+'-'+Math.random().toString(36).slice(2,5),type:'spent',source:'redemption',sourceId:r.id,sourceTitle:r.name,xpEarned:0,conversionRate:0,coinsChange:-r.coinCost,balanceAfter:wallet.balance,timestamp:Date.now()});
   if(!db.redemptions)db.redemptions=[];
-  db.redemptions.unshift({id:'rdm-'+Date.now(),rewardId:r.id,internId:id,coinsCost:r.coinCost,status:'pending',createdAt:Date.now()});
-  if(r.stock!==null&&r.stock!==undefined)r.stock=Math.max(0,parseInt(r.stock)-1);
+  // REVERTED: every redemption goes to 'pending' and waits for admin approve/reject —
+  // rewards never actually set r.approvalRequired (it's not exposed in the reward
+  // form), so gating on it here was auto-approving every redemption and skipping
+  // the admin review step entirely.
+  db.redemptions.unshift({id:'rdm-'+Date.now(),rewardId:r.id,internId:id,coinsCost:r.coinCost,status:'pending',createdAt:Date.now(),updatedAt:Date.now(),adminNote:''});
+  if(stk!==null)r.stock=stk-1;
   try{
     await Promise.all([
       fbPatch('submissions/'+id+'/coinWallet',db.submissions[id].coinWallet),
       fbPut('redemptions',db.redemptions),
       fbPut('rewards',db.rewards),
     ]);
-    showToast('🎉 Redeemed! Pending approval.');
+    showToast('⏳ Sent! Awaiting admin approval');
+    pushAdminNotif({ type:'reward_redeemed', title:'Reward Redeemed', body:`${currentUser.name} redeemed "${r.name}"`, internId:id });
     navigateTo('internRewards');
-  }catch(e){showToast('❌ Failed');}
+  }catch(e){
+    wallet.balance+=r.coinCost; wallet.totalSpent-=r.coinCost; wallet.transactions.shift(); db.redemptions.shift();
+    if(stk!==null)r.stock=stk;
+    showToast('❌ Redemption failed. Try again.');
+  }
 }
 
 async function rwAdminDeleteReward(id) {
@@ -17811,7 +16928,14 @@ async function rwAdminDeleteReward(id) {
 async function rwUpdateRdm(rdmId,status) {
   const rdm=(db.redemptions||[]).find(r=>r.id===rdmId); if(!rdm)return;
   rdm.status=status; rdm.updatedAt=Date.now();
-  try{await fbPut('redemptions',db.redemptions);showToast(status==='approved'?'✅ Approved':'❌ Rejected');renderAdminRewards(document.getElementById('contentArea'));}
+  try{
+    await fbPut('redemptions',db.redemptions);
+    showToast(status==='approved'?'✅ Approved':status==='delivered'?'📦 Marked Delivered':'❌ Rejected');
+    const rw=(db.rewards||[]).find(x=>x.id===rdm.rewardId);
+    const notifType = status==='approved' ? 'reward_approved' : status==='delivered' ? 'reward_delivered' : status==='rejected' ? 'reward_rejected' : null;
+    if (notifType) pushInternNotif(rdm.internId, { type:notifType, title:NOTIF_META[notifType].label, body: rw?.name || 'Reward' });
+    renderAdminRewards(document.getElementById('contentArea'));
+  }
   catch(e){showToast('❌ Failed');}
 }
 
@@ -17838,13 +16962,19 @@ async function rwDoAwardCoins(internId, internName) {
   const w = _getWallet(internId);
   w.balance += amt;
   w.totalEarned += amt;
-  w.transactions.unshift({ id:'txn-'+Date.now(), type:'admin_award', amount:amt, label:note, createdAt:Date.now() });
+  // BUG FIX: transaction shape now matches what Transaction History reads
+  // (coinsChange/balanceAfter/timestamp/source/sourceTitle) instead of the old
+  // amount/label/createdAt shape, which rendered as a garbled "+0 Coin Activity" row.
+  w.transactions.unshift({ id:'txn-'+Date.now()+'-'+Math.random().toString(36).slice(2,5), type:'earned', source:'manual', sourceId:'', sourceTitle:note, xpEarned:0, conversionRate:0, coinsChange:+amt, balanceAfter:w.balance, timestamp:Date.now() });
   try {
     await fbPatch('submissions/'+internId+'/coinWallet', db.submissions[internId].coinWallet);
     showToast('✅ Awarded 🪙 '+amt+' to '+internName);
     document.getElementById('rwAwardSheet')?.remove();
     renderAdminRewards(document.getElementById('contentArea'));
-  } catch(e) { showToast('❌ Failed'); }
+  } catch(e) {
+    w.balance -= amt; w.totalEarned -= amt; w.transactions.shift();
+    showToast('❌ Failed');
+  }
 }
 
 function renderAdminComplaints(ca) {
@@ -18140,7 +17270,7 @@ function exportData() {
 
 function confirmReset() {
   openModal(`<div class="modal-title" style="color:#e53e3e;">⚠️ Confirm Reset</div>
-    <div style="color:var(--text2);font-size:13px;margin-bottom:16px;"><strong>This will erase ALL data from the shared server</strong> for every intern — points, task completions, complaints, and notifications. Contributors and task definitions are kept. This cannot be undone.</div>
+    <div style="color:var(--text2);font-size:13px;margin-bottom:16px;"><strong>This will erase ALL data from the shared server</strong> for every intern — points, task completions, and complaints. Contributors and task definitions are kept. This cannot be undone.</div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
       <button class="btn btn-danger" onclick="doReset()">Yes, Reset Everything</button>
@@ -18149,9 +17279,8 @@ function confirmReset() {
 async function doReset() {
   INTERNS.filter(i => i.id !== 99).forEach(i => {
     db.submissions[i.id]  = {office:0, project:0, bugs:0, suggestions:0, dailyCounts:{}, points:0};
-    db.notifications[i.id] = [];
   });
-  db.taskCompletions = {}; db.complaints = []; db.adminNotifications = [];
+  db.taskCompletions = {}; db.complaints = [];
   db.tasks = [];
   db.pendingRequests = [];           // wipe ALL tasks — admin + personal
   closeModal();
@@ -19305,11 +18434,13 @@ function qpClearImage() {
 window.qpSubmitPost = async function() {
   if (!db.feedPosts) db.feedPosts = [];
   const chosenType = window._qpType || 'Post';
+  let notifBody = 'New post';
 
   if (chosenType === 'Poll') {
     const question = document.getElementById('qpPollQuestion')?.value.trim();
     const labels = window._qpPollOptions.map(o => (o||'').trim()).filter(Boolean);
     if (!question || labels.length < 2) return;
+    notifBody = 'Poll: ' + question;
     db.feedPosts.push({
       type: 'poll',
       tag: 'Poll',
@@ -19324,6 +18455,7 @@ window.qpSubmitPost = async function() {
   } else {
     const text = document.getElementById('qpText')?.value.trim();
     if (!text && !window._qpImageBase64) return;
+    notifBody = text || 'New post';
     db.feedPosts.push({
       type: 'quickpost',
       tag: chosenType,
@@ -19338,6 +18470,7 @@ window.qpSubmitPost = async function() {
   try {
     await fbPut('feedPosts', db.feedPosts);
     showToast('✓ Posted', 'success');
+    pushInternNotifBroadcast('all', { type:'post_created', title:'New Post', body: notifBody });
     closeQuickPost(true);
   } catch (e) { showToast('Failed to post', 'error'); }
 };
@@ -19535,7 +18668,8 @@ window.fcSave = async function(status) {
     authorName: currentUser.name,
   };
 
-  if (editIdx !== null && editIdx !== undefined) {
+  const isNew = editIdx === null || editIdx === undefined;
+  if (!isNew) {
     db.feedPosts[editIdx] = post;
   } else {
     db.feedPosts.push(post);
@@ -19544,6 +18678,9 @@ window.fcSave = async function(status) {
   try {
     await fbPut('feedPosts', db.feedPosts);
     showToast(status === 'published' ? '✓ Post published' : '✓ Draft saved', 'success');
+    if (isNew && status === 'published') {
+      pushInternNotifBroadcast('all', { type:'post_created', title:'New Post', body: desc });
+    }
     renderAdminFeed(document.getElementById('contentArea'));
   } catch(e) { showToast('Save failed', 'error'); }
 };
@@ -19636,12 +18773,16 @@ window.fpSave = async function(status) {
     authorName: currentUser.name,
   };
 
-  if (editIdx !== null && editIdx !== undefined) db.feedPosts[editIdx] = post;
+  const isNew = editIdx === null || editIdx === undefined;
+  if (!isNew) db.feedPosts[editIdx] = post;
   else db.feedPosts.push(post);
 
   try {
     await fbPut('feedPosts', db.feedPosts);
     showToast(status === 'published' ? '✓ Poll published' : '✓ Draft saved', 'success');
+    if (isNew && status === 'published') {
+      pushInternNotifBroadcast('all', { type:'post_created', title:'New Post', body: 'Poll: ' + question });
+    }
     renderAdminFeed(document.getElementById('contentArea'));
   } catch(e) { showToast('Save failed', 'error'); }
 };
@@ -20077,10 +19218,10 @@ function renderInternFeed(ca, resetScroll) {
   }).join('');
 
   ca.innerHTML = `
-  <div class="arw-page" style="font-family:'Inter',sans-serif;background:#EFE7D8;">
+  <div class="arw-page" style="font-family:'Inter',sans-serif;background:linear-gradient(160deg, #fbeee9 0%, #f3e6ee 35%, #e9e6f5 65%, #e1e4f5 100%);">
 
     <!-- Header -->
-    <div class="feed-hd" style="background:var(--surface);position:relative;z-index:3;">
+    <div class="feed-hd" style="position:relative;z-index:3;">
       <div style="font-size:21px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:-.3px;">Feed</div>
       ${totalCount > 0 ? `<span style="font-size:14px;font-weight:400;color:var(--text2);font-family:'Inter',sans-serif;">${totalCount} post${totalCount>1?'s':''}</span>` : ''}
     </div>
@@ -20217,7 +19358,7 @@ function _fcUnifiedCardHtml(p, arrIdx, authorId, authorName, pinBadge) {
   }
 
   return `
-        <div style="background:var(--surface);margin:0 0 10px;padding-bottom:4px;">
+        <div style="background:var(--surface);margin:0 12px 12px;padding-bottom:4px;border-radius:16px;overflow:hidden;">
           ${pinBadge}
           ${headerHtml}
           ${textHtml}
